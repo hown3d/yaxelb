@@ -1,0 +1,59 @@
+services:
+  target1:
+    image: traefik/whoami
+    networks:
+      lb:
+        ipv4_address: 10.0.0.10
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+  target2:
+    image: traefik/whoami
+    networks:
+      lb:
+        ipv4_address: 10.0.0.11
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+  target3:
+    image: traefik/whoami
+    networks:
+      lb:
+        ipv4_address: 10.0.0.12
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+  client:
+    image: nicolaka/netshoot
+    command:
+      - sleep 
+      - "36000"
+    init: true
+    cap_add:
+      - NET_ADMIN
+    networks:
+      lb:
+        ipv4_address: 10.0.0.42
+
+  lb:
+    build:
+      context: .
+    volumes:
+      - ./examples/config.yaml:/loadbalancer/config.yaml
+    privileged: true
+    networks:
+      lb:
+        driver_opts:
+          # must use IFNAME 
+          # log martians (spoofed packets)
+          # accept_local (allows to recieve packets with source IP that is bound to an interface)
+          com.docker.network.endpoint.sysctls: net.ipv4.conf.IFNAME.log_martians=1,net.ipv4.conf.IFNAME.accept_local=1
+        ipv4_address: 10.0.0.2
+
+    
+networks:
+  lb:
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 10.0.0.0/24
+         gateway: 10.0.0.1
+
+

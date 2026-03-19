@@ -1,0 +1,14 @@
+FROM debian:sid AS compile
+
+ARG TARGETARCH
+
+RUN apt-get update
+RUN apt-get install -y clang-22 llvm-dev llvm-22 libbpf-dev linux-headers-generic \
+  ca-certificates golang 
+
+WORKDIR /work
+COPY go.mod go.sum ./
+RUN go mod download
+
+FROM compile as libbpf
+RUN apt-get install -y libbpf-dev

@@ -1,0 +1,6 @@
+-Iinternal/bpf/kern/include
+-O2
+-g
+--target=bpf
+-std=gnu99
+-nostdinc

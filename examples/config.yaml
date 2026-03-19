@@ -1,0 +1,7 @@
+listeners:
+- address: 10.0.0.2:80
+  protocol: TCP
+  backends:
+    - address: 10.0.0.10:8080
+    - address: 10.0.0.11:8080
+    - address: 10.0.0.12:8080
