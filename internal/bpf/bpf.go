@@ -36,6 +36,12 @@ func New(conf *config.Config) (*Manager, error) {
 		objs: &objs,
 	}
 
+	var lbAlgo lbLbAlgorithm
+	if err := objs.LbAlgo.Set(lbAlgo.FromConfig(conf.Algorithm)); err != nil {
+		m.Close()
+		return nil, fmt.Errorf("setting lb algorithm: %w", err)
+	}
+
 	for _, l := range conf.Listeners {
 		if err := m.populateListenerMap(l, func() (*ebpf.Map, error) {
 			return newBackendMap(spec.Maps["listener_map"])

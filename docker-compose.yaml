@@ -20,6 +20,39 @@ services:
         ipv4_address: 10.0.0.12
     environment:
         WHOAMI_PORT_NUMBER: 8080
+  # netcat 
+  nctarget1:
+    image: nicolaka/netshoot
+    init: true
+    networks:
+      lb:
+        ipv4_address: 10.0.0.20
+    command:
+      - nc
+      - -vlk
+      - "8080"
+
+  nctarget2:
+    image: nicolaka/netshoot
+    init: true
+    networks:
+      lb:
+        ipv4_address: 10.0.0.21
+    command:
+      - nc
+      - -vlk
+      - "8080"
+  nctarget3:
+    image: nicolaka/netshoot
+    init: true
+    networks:
+      lb:
+        ipv4_address: 10.0.0.22
+    command:
+      - nc
+      - -vlk
+      - "8080"
+
   client:
     image: nicolaka/netshoot
     command:

@@ -62,12 +62,36 @@ struct {
   __uint(max_entries, 128);
 } num_backends SEC(".maps");
 
-static __always_inline struct backend *
-select_backend(__be32 lb_ip, __u16 lb_port, __u8 lb_proto) {
-  struct backend *back;
+enum lb_algorithm {
+  RANDOM = 1,
+  HASH = 2,
+};
+volatile enum lb_algorithm lb_algo;
 
-  struct listener_entry key = {
-      .ip = lb_ip, .port = lb_port, .protocol = lb_proto};
+enum backend_selection_error {
+  ERR_LISTENER_NOT_FOUND = 1,
+  ERR_NO_BACKENDS = 2,
+  ERR_UNKNOWN_ALGORITHM = 3,
+};
+
+static __always_inline __u32 random_backend_index(__u16 num_back) {
+  return bpf_get_prandom_u32() % num_back;
+}
+
+static __always_inline __u32 hash_backend_index(struct five_tuple_t *five_tuple,
+                                                __u16 num_back) {
+  // This is a veeeery simple hash
+  __u32 hash = five_tuple->src_ip.s_addr | five_tuple->dst_ip.s_addr |
+               five_tuple->src_port | five_tuple->dst_port |
+               five_tuple->protocol;
+  return hash % num_back;
+}
+
+static __always_inline enum backend_selection_error
+select_backend(struct five_tuple_t *five_tuple, struct backend **backend) {
+  struct listener_entry key = {.ip = five_tuple->dst_ip,
+                               .port = five_tuple->dst_port,
+                               .protocol = five_tuple->protocol};
   void *backend_map = bpf_map_lookup_elem(&listener_map, &key);
   if (backend_map == NULL) {
 #ifdef DEBUG
@@ -76,17 +100,30 @@ select_backend(__be32 lb_ip, __u16 lb_port, __u8 lb_proto) {
                &key.ip, bpf_ntohs(key.port), key.protocol, key.ip.s_addr,
                key.port, key.protocol);
 #endif
-    return back;
+    return -ERR_LISTENER_NOT_FOUND;
   }
 
   __u16 *num_back = bpf_map_lookup_elem(&num_backends, &key);
-  if (!num_back) {
-    return back;
+  if (num_back == NULL) {
+    return -ERR_NO_BACKENDS;
   }
 
-  __u32 index = bpf_get_prandom_u32() % *num_back;
-
-  return bpf_map_lookup_elem(backend_map, &index);
+  __u32 index;
+  switch (lb_algo) {
+  case RANDOM:
+    index = random_backend_index(*num_back);
+    break;
+  case HASH:
+    index = hash_backend_index(five_tuple, *num_back);
+    break;
+  default:
+    return -ERR_UNKNOWN_ALGORITHM;
+  }
+#ifdef DEBUG
+  bpf_printk("backend idx: %x", index);
+#endif
+  *backend = bpf_map_lookup_elem(backend_map, &index);
+  return 0;
 }
 
 // count_packets atomically increases a
@@ -99,6 +136,7 @@ int load_balance(struct xdp_md *ctx) {
   struct ethhdr *eth;
   struct iphdr *iph;
   struct tcphdr *tcph;
+  struct backend *backend;
 
   /* Default action XDP_PASS, imply everything we couldn't parse, or that
    * we don't want to deal with, we just pass up the stack and let the
@@ -188,11 +226,15 @@ int load_balance(struct xdp_md *ctx) {
 #ifdef DEBUG
     bpf_printk("conntrack entry for entry not found, creating new one");
 #endif
-    struct backend *backend = select_backend(iph->daddr, tcph->dest, ip_type);
-    if (!backend) {
-#ifdef DEBUG
-      bpf_printk("no backends not found");
-#endif
+
+    int ret = select_backend(&in, &backend);
+    if (ret < 0) {
+      bpf_printk("error selecting backend: %d", ret);
+      action = XDP_ABORTED;
+      goto out;
+    }
+    if (backend == NULL) {
+      bpf_printk("no backend found");
       action = XDP_ABORTED;
       goto out;
     }

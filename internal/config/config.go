@@ -11,8 +11,16 @@ import (
 )
 
 type Config struct {
+	Algorithm Algorithm  `yaml:"algorithm"`
 	Listeners []Listener `yaml:"listeners"`
 }
+
+type Algorithm string
+
+const (
+	AlgorithmRandom Algorithm = "random"
+	AlgorithmHash   Algorithm = "hash"
+)
 
 type Listener struct {
 	Addr     netip.AddrPort `yaml:"address"`

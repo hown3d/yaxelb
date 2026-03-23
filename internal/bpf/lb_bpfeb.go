@@ -43,6 +43,13 @@ type lbInAddr struct {
 	S_addr uint32
 }
 
+type lbLbAlgorithm uint32
+
+const (
+	lbLbAlgorithmRANDOM lbLbAlgorithm = 1
+	lbLbAlgorithmHASH   lbLbAlgorithm = 2
+)
+
 type lbListenerEntry struct {
 	_        structs.HostLayout
 	Ip       lbInAddr
@@ -109,6 +116,7 @@ type lbMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type lbVariableSpecs struct {
+	LbAlgo *ebpf.VariableSpec `ebpf:"lb_algo"`
 }
 
 // lbObjects contains all objects after they have been loaded into the kernel.
@@ -148,6 +156,7 @@ func (m *lbMaps) Close() error {
 //
 // It can be passed to loadLbObjects or ebpf.CollectionSpec.LoadAndAssign.
 type lbVariables struct {
+	LbAlgo *ebpf.Variable `ebpf:"lb_algo"`
 }
 
 // lbPrograms contains all programs after they have been loaded into the kernel.

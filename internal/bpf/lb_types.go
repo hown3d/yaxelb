@@ -98,3 +98,15 @@ func (l lbListenerEntry) FromConfig(lis config.Listener) lbListenerEntry {
 	}
 	return l
 }
+
+func (l lbLbAlgorithm) FromConfig(algo config.Algorithm) lbLbAlgorithm {
+	switch algo {
+	case config.AlgorithmRandom:
+		l = lbLbAlgorithmRANDOM
+	case config.AlgorithmHash:
+		l = lbLbAlgorithmHASH
+	default:
+		l = lbLbAlgorithmRANDOM
+	}
+	return l
+}
