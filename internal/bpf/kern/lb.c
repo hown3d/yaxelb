@@ -1,6 +1,5 @@
 #include "consts.h"
 #include "csum.h"
-#include "fib_lookup.h"
 #include "helpers/parsing.h"
 #include "vmlinux.h"
 #include <bpf/bpf_endian.h>
@@ -244,15 +243,6 @@ int load_balance(struct xdp_md *ctx) {
     // recalc checksum
     iph->check = iph_csum(iph);
   }
-
-  int ret = fib_lookup_v4(ctx, eth, iph);
-  if (ret < 0) {
-    bpf_printk("fib lookup failed %d", ret);
-    action = XDP_ABORTED;
-    goto out;
-  }
-  action = ret;
-  bpf_printk("fib lookup returned action %d", action);
 
 out:
   return action;
