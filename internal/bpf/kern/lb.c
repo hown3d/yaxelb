@@ -63,6 +63,29 @@ struct {
   __uint(max_entries, 128);
 } num_backends SEC(".maps");
 
+static __always_inline struct backend *
+select_backend(__be32 lb_ip, __u16 lb_port, __u8 lb_proto) {
+  struct backend *back;
+
+  // TODO: load balance algo
+  __u32 index = 0;
+
+  struct listener_entry key = {
+      .ip = lb_ip, .port = lb_port, .protocol = lb_proto};
+  void *backend_map = bpf_map_lookup_elem(&listener_map, &key);
+  if (backend_map == NULL) {
+#ifdef DEBUG
+    bpf_printk("listener { .ip = %pI4, .port = %d, .protocol = %d} (%x%x%x) "
+               "not found in listener_map",
+               &key.ip, bpf_ntohs(key.port), key.protocol, key.ip.s_addr,
+               key.port, key.protocol);
+#endif
+    return back;
+  }
+
+  return bpf_map_lookup_elem(backend_map, &index);
+}
+
 // count_packets atomically increases a
 // packet counter on every invocation.
 SEC("xdp")
@@ -162,25 +185,7 @@ int load_balance(struct xdp_md *ctx) {
 #ifdef DEBUG
     bpf_printk("conntrack entry for entry not found, creating new one");
 #endif
-    // New val must be the backend
-    // TODO: load balance algo
-    __u32 index = 0;
-
-    struct listener_entry key = {
-        .ip = iph->daddr, .port = tcph->dest, .protocol = ip_type};
-    void *backend_map = bpf_map_lookup_elem(&listener_map, &key);
-    if (backend_map == NULL) {
-#ifdef DEBUG
-      bpf_printk("listener { .ip = %pI4, .port = %d, .protocol = %d} (%x%x%x) "
-                 "not found in listener_map",
-                 &key.ip, bpf_ntohs(key.port), key.protocol, key.ip.s_addr,
-                 key.port, key.protocol);
-#endif
-      action = XDP_ABORTED;
-      goto out;
-    }
-
-    struct backend *backend = bpf_map_lookup_elem(backend_map, &index);
+    struct backend *backend = select_backend(iph->daddr, tcph->dest, ip_type);
     if (!backend) {
 #ifdef DEBUG
       bpf_printk("no backends not found");
@@ -193,6 +198,9 @@ int load_balance(struct xdp_md *ctx) {
     bpf_printk("new backend: %pI4:%d", &backend->ip, bpf_ntohs(backend->port));
 #endif
 
+    // when the backend responds:
+    // - source ip + src port is backend IP and backend port
+    // - destination is loadbalancer ip + original source port
     struct five_tuple_t in_loadbalancer = {
         .src_ip = backend->ip, // Backend IP
         .dst_ip = iph->daddr,  //  LB IP
