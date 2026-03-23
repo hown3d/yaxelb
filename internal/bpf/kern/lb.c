@@ -67,9 +67,6 @@ static __always_inline struct backend *
 select_backend(__be32 lb_ip, __u16 lb_port, __u8 lb_proto) {
   struct backend *back;
 
-  // TODO: load balance algo
-  __u32 index = 0;
-
   struct listener_entry key = {
       .ip = lb_ip, .port = lb_port, .protocol = lb_proto};
   void *backend_map = bpf_map_lookup_elem(&listener_map, &key);
@@ -82,6 +79,13 @@ select_backend(__be32 lb_ip, __u16 lb_port, __u8 lb_proto) {
 #endif
     return back;
   }
+
+  __u16 *num_back = bpf_map_lookup_elem(&num_backends, &key);
+  if (!num_back) {
+    return back;
+  }
+
+  __u32 index = bpf_get_prandom_u32() % *num_back;
 
   return bpf_map_lookup_elem(backend_map, &index);
 }
