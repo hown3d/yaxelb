@@ -145,10 +145,10 @@ int load_balance(struct xdp_md *ctx) {
   __u32 action = XDP_PASS; /* Default action */
 
   /* These keep track of the next header type and iterator pointer */
-  struct hdr_cursor nh;
-  nh.pos = data;
+  struct hdr_cursor cursor;
+  cursor.pos = data;
 
-  eth_type = parse_ethhdr(&nh, data_end, &eth);
+  eth_type = parse_ethhdr(&cursor, data_end, &eth);
   if (eth_type < 0) {
 #ifdef DEBUG
     bpf_printk("error parsing ethhdr");
@@ -162,7 +162,7 @@ int load_balance(struct xdp_md *ctx) {
     goto out;
   }
 
-  ip_type = parse_iphdr(&nh, data_end, &iph);
+  ip_type = parse_iphdr(&cursor, data_end, &iph);
   if (ip_type < 0) {
 #ifdef DEBUG
     bpf_printk("error parsing iphdr");
@@ -177,7 +177,7 @@ int load_balance(struct xdp_md *ctx) {
     goto out;
   }
 
-  if (parse_tcphdr(&nh, data_end, &tcph) < 0) {
+  if (parse_tcphdr(&cursor, data_end, &tcph) < 0) {
 #ifdef DEBUG
     bpf_printk("bad tcp header");
 #endif

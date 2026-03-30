@@ -6,27 +6,28 @@ struct hdr_cursor {
   void *pos;
 };
 
-static __always_inline int parse_ethhdr(struct hdr_cursor *nh, void *data_end,
+static __always_inline int parse_ethhdr(struct hdr_cursor *cursor,
+                                        void *data_end,
                                         struct ethhdr **ethhdr) {
-  struct ethhdr *eth = nh->pos;
+  struct ethhdr *eth = cursor->pos;
   int hdrsize = sizeof(*eth);
 
   /* Byte-count bounds check; check if current pointer + size of header
    * is after data_end.
    */
-  if (nh->pos + hdrsize > data_end)
+  if (cursor->pos + hdrsize > data_end)
     return -1;
 
-  nh->pos += hdrsize;
+  cursor->pos += hdrsize;
   *ethhdr = eth;
 
   return eth->h_proto; /* network-byte-order */
 }
 
-static __always_inline int parse_iphdr(struct hdr_cursor *nh, void *data_end,
-                                       struct iphdr **iphdr) {
+static __always_inline int parse_iphdr(struct hdr_cursor *cursor,
+                                       void *data_end, struct iphdr **iphdr) {
 
-  struct iphdr *iph = nh->pos;
+  struct iphdr *iph = cursor->pos;
   int hdrsize;
 
   if (iph + 1 > data_end)
@@ -38,18 +39,19 @@ static __always_inline int parse_iphdr(struct hdr_cursor *nh, void *data_end,
     return -1;
 
   /* Variable-length IPv4 header, need to use byte-based arithmetic */
-  if (nh->pos + hdrsize > data_end)
+  if (cursor->pos + hdrsize > data_end)
     return -1;
 
-  nh->pos += hdrsize;
+  cursor->pos += hdrsize;
   *iphdr = iph;
   return iph->protocol;
 }
 
-static __always_inline int parse_tcphdr(struct hdr_cursor *nh, void *data_end,
+static __always_inline int parse_tcphdr(struct hdr_cursor *cursor,
+                                        void *data_end,
                                         struct tcphdr **tcphdr) {
   int len;
-  struct tcphdr *h = nh->pos;
+  struct tcphdr *h = cursor->pos;
 
   if (h + 1 > data_end)
     return -1;
@@ -60,10 +62,10 @@ static __always_inline int parse_tcphdr(struct hdr_cursor *nh, void *data_end,
     return -1;
 
   /* Variable-length TCP header, need to use byte-based arithmetic */
-  if (nh->pos + len > data_end)
+  if (cursor->pos + len > data_end)
     return -1;
 
-  nh->pos += len;
+  cursor->pos += len;
   *tcphdr = h;
 
   return len;
