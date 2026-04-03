@@ -54,7 +54,7 @@ func (u *backendHealthUpdater) Run(ctx context.Context) {
 						// since we are loading the backend from the kernel, we must store port here in network order
 						Port: byteorder.HostToNetwork16(res.Target.Addr.Port()),
 						Ip:   lbInAddrFromNetipAddr(res.Target.Addr.Addr()),
-					}, res.Healthy)
+					}, res.Healthy())
 				if err != nil {
 					u.log.Error("updating backend health", "error", err)
 				}
@@ -147,8 +147,4 @@ func (u *backendHealthUpdater) currentBackends() (backendMap, error) {
 		return nil, err
 	}
 	return backends, nil
-}
-
-func remove[T any](slice []T, s int) []T {
-	return append(slice[:s], slice[s+1:]...)
 }

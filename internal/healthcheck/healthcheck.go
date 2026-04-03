@@ -10,6 +10,8 @@ import (
 	"yaxelb/internal/config"
 )
 
+const failedTreshhold = 3
+
 var checkInterval = 10 * time.Second
 
 type Manager struct {
@@ -21,9 +23,12 @@ type Manager struct {
 func NewManager(log *slog.Logger, targets []config.Backend, protocol config.Protocol) *Manager {
 	checkers := make([]*checker, 0, len(targets))
 	for _, t := range targets {
+		t := Target{Proto: protocol, Addr: t.Addr}
 		checkers = append(checkers, &checker{
-			dialer: &net.Dialer{},
-			targt:  Target{Proto: protocol, Addr: t.Addr},
+			Dialer:          &net.Dialer{},
+			Targt:           t,
+			FailedTreshhold: failedTreshhold,
+			log:             log.With("target", t),
 		})
 	}
 	return &Manager{
@@ -61,7 +66,6 @@ func (m *Manager) performChecks(ctx context.Context) {
 func (m *Manager) runChecks(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, c := range m.checkers {
-		m.log.Debug("performing healthcheck", "target", c.targt)
 		wg.Go(func() {
 			m.checkChan <- c.Check(ctx)
 		})

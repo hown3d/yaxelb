@@ -3,6 +3,7 @@ package healthcheck
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"time"
@@ -20,14 +21,22 @@ func (t Target) String() string {
 }
 
 type Result struct {
-	Healthy bool
-	Target  Target
-	err     error
+	Target Target
+	Err    error
+}
+
+func (r Result) Healthy() bool {
+	return r.Err == nil
 }
 
 type checker struct {
-	dialer netDialer
-	targt  Target
+	Dialer          netDialer
+	Targt           Target
+	FailedTreshhold uint
+
+	log           *slog.Logger
+	failedCounter uint
+	lastError     error
 }
 
 type netDialer interface {
@@ -37,12 +46,27 @@ type netDialer interface {
 var timeout = time.Second * 5
 
 func (c *checker) Check(ctx context.Context) *Result {
+	c.log.Debug("performing healthcheck")
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	conn, err := c.dialer.DialContext(ctx, c.targt.Proto.GoNetwork(), c.targt.Addr.String())
+	conn, err := c.Dialer.DialContext(ctx, c.Targt.Proto.GoNetwork(), c.Targt.Addr.String())
 	if err != nil {
-		return &Result{Healthy: false, Target: c.targt, err: err}
+		c.failedCounter++
+		c.lastError = err
+		c.log.Debug("healthcheck failed", "err", err.Error(), "failed", c.failedCounter)
+		return c.calculateResult()
 	}
 	defer conn.Close()
-	return &Result{Healthy: true, Target: c.targt}
+	c.failedCounter = 0
+	c.lastError = nil
+	return c.calculateResult()
+}
+
+func (c *checker) calculateResult() *Result {
+	r := &Result{Target: c.Targt}
+	if c.failedCounter >= c.FailedTreshhold {
+		r.Err = c.lastError
+	}
+	return r
 }
