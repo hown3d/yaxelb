@@ -70,6 +70,8 @@ services:
       context: .
     volumes:
       - ./examples/config.yaml:/loadbalancer/config.yaml
+    command:
+      - -log-level=debug
     privileged: true
     networks:
       lb:
