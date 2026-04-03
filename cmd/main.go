@@ -7,11 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"sync"
 
 	"yaxelb/internal/bpf"
 	"yaxelb/internal/config"
-	"yaxelb/internal/healthcheck"
 
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/vishvananda/netlink"
@@ -44,7 +42,7 @@ func run() error {
 	ifname := "eth0" // Change this to an interface on your machine.
 	iface, err := netlink.LinkByName(ifname)
 	if err != nil {
-		return fmt.Errorf("Getting interface %s: %w", ifname, err)
+		return fmt.Errorf("getting interface %s: %w", ifname, err)
 	}
 
 	c, err := config.FromFile(*configFile)
@@ -53,26 +51,18 @@ func run() error {
 	}
 
 	slog.Debug("parsed config", "config", c)
+
 	bpfManager, err := bpf.New(c)
 	if err != nil {
 		return fmt.Errorf("loading program: %w", err)
 	}
 	defer bpfManager.Close()
 
-	var healthcheckWg sync.WaitGroup
-	for _, lis := range c.Listeners {
-		log := slog.With("listener", fmt.Sprintf("%s://%s", lis.Protocol.GoNetwork(), lis.Addr))
-		healthManager := healthcheck.NewManager(log, lis.Backends, lis.Protocol)
-		defer healthManager.Close()
-		healthcheckWg.Go(func() {
-			log.Info("running healthcheck manager")
-			healthManager.Run(ctx)
-		})
-	}
-
 	if err := bpfManager.Attach(iface); err != nil {
 		return fmt.Errorf("attaching program to interface %s: %s", ifname, err)
 	}
+
+	bpfManager.Run(ctx)
 
 	slog.Info("successfully attached program, waiting for signals...")
 	<-ctx.Done()

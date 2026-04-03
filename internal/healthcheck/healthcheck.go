@@ -13,10 +13,9 @@ import (
 var checkInterval = 10 * time.Second
 
 type Manager struct {
-	checkChan    chan *Result
-	checkers     []*checker
-	targetHealth map[target]bool
-	log          *slog.Logger
+	checkChan chan *Result
+	checkers  []*checker
+	log       *slog.Logger
 }
 
 func NewManager(log *slog.Logger, targets []config.Backend, protocol config.Protocol) *Manager {
@@ -24,24 +23,19 @@ func NewManager(log *slog.Logger, targets []config.Backend, protocol config.Prot
 	for _, t := range targets {
 		checkers = append(checkers, &checker{
 			dialer: &net.Dialer{},
-			targt:  target{proto: protocol, addr: t.Addr},
+			targt:  Target{Proto: protocol, Addr: t.Addr},
 		})
 	}
 	return &Manager{
-		checkChan:    make(chan *Result),
-		checkers:     checkers,
-		log:          log,
-		targetHealth: make(map[target]bool, len(targets)),
+		checkChan: make(chan *Result),
+		checkers:  checkers,
+		log:       log,
 	}
 }
 
 func (m *Manager) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		m.performChecks(ctx)
-	})
-	wg.Go(m.updateTargetHealth)
-	wg.Wait()
+	m.log.Info("running healthcheck manager")
+	m.performChecks(ctx)
 }
 
 func (m *Manager) Close() error {
@@ -49,15 +43,8 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-func (m *Manager) updateTargetHealth() {
-	for res := range m.checkChan {
-		log := m.log.With("target", res.Target)
-		if res.err != nil {
-			log.Error("performing healthcheck failed", "error", res.err)
-		}
-		log.Debug("healthcheck performed", "healthy", res.Healthy)
-		m.targetHealth[res.Target] = res.Healthy
-	}
+func (m *Manager) ResultChan() <-chan *Result {
+	return m.checkChan
 }
 
 func (m *Manager) performChecks(ctx context.Context) {

@@ -1,10 +1,14 @@
 package bpf
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 
 	"yaxelb/internal/config"
+	"yaxelb/internal/healthcheck"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -12,8 +16,10 @@ import (
 )
 
 type Manager struct {
-	objs    *lbObjects
-	xdpLink link.Link
+	log             *slog.Logger
+	backendUpdaters []*backendHealthUpdater
+	objs            *lbObjects
+	xdpLink         link.Link
 }
 
 func New(conf *config.Config) (*Manager, error) {
@@ -34,6 +40,7 @@ func New(conf *config.Config) (*Manager, error) {
 	}
 	m := &Manager{
 		objs: &objs,
+		log:  slog.Default().WithGroup("bpf"),
 	}
 
 	var lbAlgo lbLbAlgorithm
@@ -54,6 +61,14 @@ func New(conf *config.Config) (*Manager, error) {
 			m.Close()
 			return nil, err
 		}
+
+		healthManager := healthcheck.NewManager(m.log, l.Backends, l.Protocol)
+		updater, err := m.newBackendHealthUpdater(l, healthManager)
+		if err != nil {
+			return nil, fmt.Errorf("creating backend health updater: %w", err)
+		}
+
+		m.backendUpdaters = append(m.backendUpdaters, updater)
 	}
 
 	return m, nil
@@ -72,12 +87,25 @@ func (m *Manager) Attach(iface netlink.Link) error {
 	return nil
 }
 
+func (m *Manager) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	for _, u := range m.backendUpdaters {
+		wg.Go(func() {
+			u.Run(ctx)
+		})
+	}
+	wg.Wait()
+}
+
 func (m *Manager) Close() error {
 	var err error
 	if m.xdpLink != nil {
 		err = errors.Join(err, m.xdpLink.Close())
 	}
 	err = errors.Join(err, m.objs.Close())
+	for _, u := range m.backendUpdaters {
+		err = errors.Join(err, u.Close())
+	}
 	return err
 }
 

@@ -10,36 +10,36 @@ import (
 	"yaxelb/internal/config"
 )
 
-type target struct {
-	addr  netip.AddrPort
-	proto config.Protocol
+type Target struct {
+	Addr  netip.AddrPort
+	Proto config.Protocol
 }
 
-func (t target) String() string {
-	return fmt.Sprintf("%s://%s", t.proto.GoNetwork(), t.addr)
+func (t Target) String() string {
+	return fmt.Sprintf("%s://%s", t.Proto.GoNetwork(), t.Addr)
 }
 
 type Result struct {
 	Healthy bool
-	Target  target
+	Target  Target
 	err     error
 }
 
 type checker struct {
 	dialer netDialer
-	targt  target
+	targt  Target
 }
 
 type netDialer interface {
 	DialContext(ctx context.Context, network string, addr string) (net.Conn, error)
 }
 
-var timeout = time.Second * 10
+var timeout = time.Second * 5
 
 func (c *checker) Check(ctx context.Context) *Result {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	conn, err := c.dialer.DialContext(ctx, c.targt.proto.GoNetwork(), c.targt.addr.String())
+	conn, err := c.dialer.DialContext(ctx, c.targt.Proto.GoNetwork(), c.targt.Addr.String())
 	if err != nil {
 		return &Result{Healthy: false, Target: c.targt, err: err}
 	}
