@@ -229,8 +229,15 @@ int load_balance(struct xdp_md *ctx) {
 
     int ret = select_backend(&in, &backend);
     if (ret < 0) {
-      bpf_printk("error selecting backend: %d", ret);
-      action = XDP_ABORTED;
+      if (ret == -ERR_LISTENER_NOT_FOUND) {
+        // program will be invoced also if the LB sends out packets.
+        // To ensure we don't drop returning packets, we will just let the
+        // kernel handle such packets.
+        action = XDP_PASS;
+      } else {
+        bpf_printk("error selecting backend: %d", ret);
+        action = XDP_ABORTED;
+      }
       goto out;
     }
     if (backend == NULL) {

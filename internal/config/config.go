@@ -59,6 +59,10 @@ func (p Protocol) Unix() uint8 {
 	return 0
 }
 
+func (p Protocol) GoNetwork() string {
+	return strings.ToLower(string(p))
+}
+
 type Backend struct {
 	Addr netip.AddrPort `yaml:"address"`
 }

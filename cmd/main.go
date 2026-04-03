@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 
@@ -13,41 +15,56 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-var configFile = flag.String("config-file", "/loadbalancer/config.yaml", "config file")
+var (
+	configFile = flag.String("config-file", "/loadbalancer/config.yaml", "config file")
+	logLevel   slog.Level
+)
 
 func main() {
+	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level")
 	flag.Parse()
+	slog.SetLogLoggerLevel(logLevel)
+	if err := run(); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+}
 
+func run() error {
 	// Remove resource limits for kernels <5.11.
 	if err := rlimit.RemoveMemlock(); err != nil {
-		log.Fatal("Removing memlock:", err)
+		return fmt.Errorf("Removing memlock: %w", err)
 	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
+	defer cancel()
 
 	ifname := "eth0" // Change this to an interface on your machine.
 	iface, err := netlink.LinkByName(ifname)
 	if err != nil {
-		log.Fatalf("Getting interface %s: %s", ifname, err)
+		return fmt.Errorf("getting interface %s: %w", ifname, err)
 	}
 
 	c, err := config.FromFile(*configFile)
 	if err != nil {
-		log.Fatal("parsing config:", err)
+		return fmt.Errorf("parsing config: %W", err)
 	}
 
-	log.Printf("%+v", c)
-	manager, err := bpf.New(c)
+	slog.Debug("parsed config", "config", c)
+
+	bpfManager, err := bpf.New(c)
 	if err != nil {
-		log.Fatalf("loading program: %s", err)
+		return fmt.Errorf("loading program: %w", err)
 	}
-	defer manager.Close()
+	defer bpfManager.Close()
 
-	if err := manager.Attach(iface); err != nil {
-		log.Fatalf("attaching program to interface %s: %s", ifname, err)
+	if err := bpfManager.Attach(iface); err != nil {
+		return fmt.Errorf("attaching program to interface %s: %s", ifname, err)
 	}
 
-	log.Printf("successfully attached program, waiting for signals...")
+	bpfManager.Run(ctx)
 
-	stop := make(chan os.Signal, 5)
-	signal.Notify(stop, os.Interrupt, os.Kill)
-	<-stop
+	slog.Info("successfully attached program, waiting for signals...")
+	<-ctx.Done()
+	return nil
 }
