@@ -74,6 +74,8 @@ services:
   lb:
     build:
       context: .
+      args:
+        BASE_IMAGE: nicolaka/netshoot
     volumes:
       - ./examples/config.yaml:/loadbalancer/config.yaml
     command:

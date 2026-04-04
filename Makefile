@@ -1,7 +1,7 @@
-export KERNEL_VERSION = 6.6.13
+export KERNEL_VERSION = 6.12.59
 export ARCH = $(shell uname -m)
 
-INCLUDE_FOLDER = "internal/bpf/include"
+INCLUDE_FOLDER = "internal/bpf/kern/include"
 generate: go-generate
 
 go-generate:
@@ -14,7 +14,11 @@ ebpf-test:
 
 generate-btf-headers:
 	docker build -t bpftool https://github.com/libbpf/bpftool.git#main
-	docker run bpftool btf dump file /sys/kernel/btf/vmlinux format c > $(INCLUDE_FOLDER)/vmlinux.h
+	# ensure kernel of docker vm is new enough
+	# TODO: find a way to make this reproducible for a certain kernel image
+	docker run \
+		-v /sys/kernel/btf:/sys/kernel/btf \
+		bpftool btf dump file /sys/kernel/btf/nf_conntrack format c > $(INCLUDE_FOLDER)/vmlinux.h
 
 build-libbpf-image:
 	docker build -t libbpf --target libbpf .

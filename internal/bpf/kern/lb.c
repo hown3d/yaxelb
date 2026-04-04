@@ -1,3 +1,4 @@
+#include "conntrack.h"
 #include "consts.h"
 #include "csum.h"
 #include "helpers/parsing.h"
@@ -94,12 +95,6 @@ select_backend(struct five_tuple_t *five_tuple, struct backend **backend) {
                                .protocol = five_tuple->protocol};
   void *backend_map = bpf_map_lookup_elem(&listener_map, &key);
   if (backend_map == NULL) {
-#ifdef DEBUG
-    bpf_printk("listener { .ip = %pI4, .port = %d, .protocol = %d} (%x%x%x) "
-               "not found in listener_map",
-               &key.ip, bpf_ntohs(key.port), key.protocol, key.ip.s_addr,
-               key.port, key.protocol);
-#endif
     return -ERR_LISTENER_NOT_FOUND;
   }
 
@@ -223,21 +218,24 @@ int load_balance(struct xdp_md *ctx) {
     // recalc checksum
     iph->check = iph_csum(iph);
   } else {
-#ifdef DEBUG
-    bpf_printk("conntrack entry for entry not found, creating new one");
-#endif
-
     int ret = select_backend(&in, &backend);
     if (ret < 0) {
       if (ret == -ERR_LISTENER_NOT_FOUND) {
-        // program will be invoced also if the LB sends out packets.
-        // To ensure we don't drop returning packets, we will just let the
-        // kernel handle such packets.
-        action = XDP_PASS;
-      } else {
-        bpf_printk("error selecting backend: %d", ret);
-        action = XDP_ABORTED;
+        // To ensure we don't drop returning packets from connections the LB
+        // created, we will just let the kernel handle such packets.
+        action = lookup_kernel_conntrack(ctx, iph->saddr, tcph->source,
+                                         iph->daddr, tcph->dest, ip_type);
+        if (action == XDP_ABORTED) {
+#ifdef DEBUG
+          bpf_printk("listener { .ip = %pI4, .port = %d, .protocol = %d}"
+                     "not found in listener_map",
+                     &in.dst_ip, bpf_ntohs(in.dst_port), in.protocol);
+#endif
+        }
+        goto out;
       }
+      bpf_printk("error selecting backend: %d", ret);
+      action = XDP_ABORTED;
       goto out;
     }
     if (backend == NULL) {
