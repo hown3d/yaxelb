@@ -1,6 +1,7 @@
 package config
 
 import (
+	"flag"
 	"fmt"
 	"net/netip"
 	"os"
@@ -13,6 +14,22 @@ import (
 type Config struct {
 	Algorithm Algorithm  `yaml:"algorithm"`
 	Listeners []Listener `yaml:"listeners"`
+
+	healthcheck healthcheck
+}
+
+var flagConfig Config
+
+func AddToFlags(fs *flag.FlagSet) {
+	fs.BoolVar(&flagConfig.healthcheck.Enabled, "enable-healthcheck", true, "Wether to enable backend healthchecks")
+}
+
+func (c *Config) HealthchecksEnabled() bool {
+	return c.healthcheck.Enabled
+}
+
+type healthcheck struct {
+	Enabled bool
 }
 
 type Algorithm string
@@ -72,7 +89,8 @@ func FromFile(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var c Config
+	// use flags as default
+	c := flagConfig
 	if err := yaml.NewDecoder(f).Decode(&c); err != nil {
 		return nil, err
 	}

@@ -62,13 +62,15 @@ func New(conf *config.Config) (*Manager, error) {
 			return nil, err
 		}
 
-		healthManager := healthcheck.NewManager(m.log, l.Backends, l.Protocol)
-		updater, err := m.newBackendHealthUpdater(l, healthManager)
-		if err != nil {
-			return nil, fmt.Errorf("creating backend health updater: %w", err)
-		}
+		if conf.HealthchecksEnabled() {
+			healthManager := healthcheck.NewManager(m.log, l.Backends, l.Protocol)
+			updater, err := m.newBackendHealthUpdater(l, healthManager)
+			if err != nil {
+				return nil, fmt.Errorf("creating backend health updater: %w", err)
+			}
 
-		m.backendUpdaters = append(m.backendUpdaters, updater)
+			m.backendUpdaters = append(m.backendUpdaters, updater)
+		}
 	}
 
 	return m, nil

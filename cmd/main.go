@@ -22,6 +22,7 @@ var (
 
 func main() {
 	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level")
+	config.AddToFlags(flag.CommandLine)
 	flag.Parse()
 	slog.SetLogLoggerLevel(logLevel)
 	if err := run(); err != nil {
