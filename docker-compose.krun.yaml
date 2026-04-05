@@ -1,0 +1,69 @@
+services:
+  target1:
+    image: traefik/whoami
+    runtime: krun
+    networks:
+      lbkrun:
+        ipv4_address: 192.168.0.10
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+    command:
+      - --verbose
+  target2:
+    image: traefik/whoami
+    runtime: krun
+    networks:
+      lbkrun:
+        ipv4_address: 192.168.0.11
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+    command:
+      - --verbose
+  target3:
+    image: traefik/whoami
+    runtime: krun
+    networks:
+      lbkrun:
+        ipv4_address: 192.168.0.12
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+    command:
+      - --verbose
+
+  client:
+    image: nicolaka/netshoot
+    command:
+      - sleep 
+      - "36000"
+    init: true
+    cap_add:
+      - NET_ADMIN
+    networks:
+      lbkrun:
+        ipv4_address: 192.168.0.42
+
+  lb:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: nicolaka/netshoot
+    volumes:
+      - ./examples/config.krun.yaml:/loadbalancer/config.yaml
+    command:
+      - -log-level=debug
+      - -enable-healthcheck=true
+    privileged: true
+    networks:
+      lbkrun:
+        ipv4_address: 192.168.0.2
+
+    
+networks:
+  lbkrun:
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 192.168.0.0/24
+         gateway: 192.168.0.1
+
+
