@@ -3,14 +3,12 @@ set -eo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && /bin/pwd)"
 
-if ! docker image ls | grep xdp-dump &>/dev/null; then
-  docker build -t xdp-dump -f ${DIR}/Dockerfile.xdpdump ${DIR}
-fi
+docker build -t xdp-tools -f ${DIR}/Dockerfile.xdptools ${DIR}
 
 container=""
 
 print_help() {
-  echo "xdpdump.sh"
+  echo "xdptools.sh"
   echo "--container (binds xdpdump into other container network)"
 }
 
@@ -59,6 +57,5 @@ docker run -iq --rm \
   --volume /lib/modules:/lib/modules:ro \
   --volume /sys:/sys \
   --volume $(pwd):/work \
-  xdp-dump \
+  xdp-tools \
   "$@"
-# -w - | docker run -i nicolaka/netshoot tcpdump -n -vvv -r -

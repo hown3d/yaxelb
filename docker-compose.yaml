@@ -80,6 +80,9 @@ services:
       - ./examples/config.yaml:/loadbalancer/config.yaml
     command:
       - -log-level=debug
+      - -enable-healthcheck=true
+      # use generic xdp mode, because veth pairs do not natively support XDP_REDIRECT
+      - -xdp-mode=generic
     privileged: true
     networks:
       lb:

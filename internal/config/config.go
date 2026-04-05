@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cilium/ebpf/link"
 	"github.com/goccy/go-yaml"
 	"golang.org/x/sys/unix"
 )
@@ -16,12 +17,14 @@ type Config struct {
 	Listeners []Listener `yaml:"listeners"`
 
 	healthcheck healthcheck
+	XdpMode     XDPMode
 }
 
 var flagConfig Config
 
 func AddToFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&flagConfig.healthcheck.Enabled, "enable-healthcheck", true, "Wether to enable backend healthchecks")
+	fs.Var(&flagConfig.XdpMode, "xdp-mode", "XDP Mode to use for attaching xdp program")
 }
 
 func (c *Config) HealthchecksEnabled() bool {
@@ -31,6 +34,35 @@ func (c *Config) HealthchecksEnabled() bool {
 type healthcheck struct {
 	Enabled bool
 }
+
+type XDPMode string
+
+// Set implements [flag.Value].
+func (x *XDPMode) Set(v string) error {
+	switch v {
+	case "", string(XDPModeGeneric):
+		*x = XDPMode(v)
+		return nil
+	}
+	return fmt.Errorf("unsupported xdp-mode: %s", v)
+}
+
+// String implements [flag.Value].
+func (x *XDPMode) String() string {
+	return string(*x)
+}
+
+func (x XDPMode) ToBPFFlags() link.XDPAttachFlags {
+	switch x {
+	case XDPModeGeneric:
+		return link.XDPGenericMode
+	}
+	return 0
+}
+
+const (
+	XDPModeGeneric XDPMode = "generic"
+)
 
 type Algorithm string
 

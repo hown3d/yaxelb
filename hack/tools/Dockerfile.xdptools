@@ -1,6 +1,5 @@
 FROM debian:13 AS builder
 
-ARG UTILS="xdp-dump"
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
@@ -23,7 +22,8 @@ RUN apt-get update && apt-get install -y \
 ADD https://github.com/xdp-project/xdp-tools.git /opt/xdp-tools
 WORKDIR /opt/xdp-tools
 
-RUN ./configure && make UTILS=${UTILS} && make UTILS=${UTILS} install
+ARG UTILS="xdp-dump xdp-monitor"
+RUN ./configure && make UTILS="${UTILS}" && make UTILS="${UTILS}" install
 
 FROM debian:13-slim AS runtime
 
@@ -39,4 +39,3 @@ COPY --from=builder /usr/local /usr/local
 
 ENV PATH="/usr/local/bin:/usr/local/sbin:$PATH"
 
-ENTRYPOINT ["xdpdump"]

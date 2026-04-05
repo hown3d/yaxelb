@@ -76,11 +76,12 @@ func New(conf *config.Config) (*Manager, error) {
 	return m, nil
 }
 
-func (m *Manager) Attach(iface netlink.Link) error {
+func (m *Manager) Attach(iface netlink.Link, mode config.XDPMode) error {
 	// Attach count_packets to the network interface.
 	xdpLink, err := link.AttachXDP(link.XDPOptions{
 		Program:   m.objs.LoadBalance,
 		Interface: iface.Attrs().Index,
+		Flags:     mode.ToBPFFlags(),
 	})
 	if err != nil {
 		return fmt.Errorf("attaching XDP: %w", err)

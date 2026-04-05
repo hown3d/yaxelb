@@ -1,6 +1,7 @@
 #include "conntrack.h"
 #include "consts.h"
 #include "csum.h"
+#include "fib_lookup.h"
 #include "helpers/parsing.h"
 #include "vmlinux.h"
 #include <bpf/bpf_endian.h>
@@ -291,7 +292,11 @@ int load_balance(struct xdp_md *ctx) {
     iph->check = iph_csum(iph);
   }
 
+  action = fib_lookup_v4(ctx, eth, iph);
 out:
+#ifdef DEBUG
+  bpf_printk("action %d", action);
+#endif
   return action;
 }
 

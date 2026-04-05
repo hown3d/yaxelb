@@ -59,7 +59,7 @@ func run() error {
 	}
 	defer bpfManager.Close()
 
-	if err := bpfManager.Attach(iface); err != nil {
+	if err := bpfManager.Attach(iface, c.XdpMode); err != nil {
 		return fmt.Errorf("attaching program to interface %s: %s", ifname, err)
 	}
 
