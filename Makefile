@@ -52,4 +52,4 @@ xdpdump-wireshark:
 	./hack/tools/xdpdump.sh xdpdump --container yaxelb-lb-1 -i eth0 -p load_balance --rx-capture=entry,exit -w - | wireshark -k -i -
 
 xdpmonitor:
-	./hack/tools/xdptools.sh xdp-monitor --container yaxelb-lb-1 -i eth0 -p load_balance --rx-capture=entry,exit -w - | docker run -i nicolaka/netshoot tcpdump -r - -nevvva
+	./hack/tools/xdptools.sh xdp-monitor --container yaxelb-lb-1
