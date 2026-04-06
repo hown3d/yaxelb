@@ -80,9 +80,11 @@ services:
       - ./examples/config.yaml:/loadbalancer/config.yaml
     command:
       - -log-level=debug
-      - -enable-healthcheck=true
+      - -enable-healthcheck=false
       # use generic xdp mode, because veth pairs do not natively support XDP_REDIRECT
-      - -xdp-mode=generic
+      # To do so, one must enable gro and disable tx-checksumming via ethtool
+      # - -xdp-mode=generic
+      - -xdp-mode=driver
     privileged: true
     networks:
       lb:

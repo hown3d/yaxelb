@@ -39,8 +39,8 @@ type XDPMode string
 
 // Set implements [flag.Value].
 func (x *XDPMode) Set(v string) error {
-	switch v {
-	case "", string(XDPModeGeneric):
+	switch XDPMode(v) {
+	case "", XDPModeGeneric, XDPModeDriver:
 		*x = XDPMode(v)
 		return nil
 	}
@@ -56,12 +56,16 @@ func (x XDPMode) ToBPFFlags() link.XDPAttachFlags {
 	switch x {
 	case XDPModeGeneric:
 		return link.XDPGenericMode
+	case XDPModeDriver:
+		return link.XDPDriverMode
 	}
+
 	return 0
 }
 
 const (
 	XDPModeGeneric XDPMode = "generic"
+	XDPModeDriver  XDPMode = "driver"
 )
 
 type Algorithm string
