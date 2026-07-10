@@ -71,10 +71,10 @@ func (l lbListenerEntry) MarshalBinary() (data []byte, err error) {
 	return data, nil
 }
 
-func (l lbListenerEntry) FromConfig(lis config.Listener) lbListenerEntry {
+func (l lbListenerEntry) FromConfig(lis config.Listener, addr netip.Addr) lbListenerEntry {
 	l = lbListenerEntry{
-		Port:     lis.Addr.Port(),
-		Ip:       lbInAddrFromNetipAddr(lis.Addr.Addr()),
+		Port:     lis.Port,
+		Ip:       lbInAddrFromNetipAddr(addr),
 		Protocol: lis.Protocol.Unix(),
 	}
 	return l

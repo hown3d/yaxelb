@@ -10,18 +10,25 @@ import (
 
 	"yaxelb/internal/bpf"
 	"yaxelb/internal/config"
+	"yaxelb/pkg/net"
 
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/vishvananda/netlink"
 )
 
 var (
-	configFile = flag.String("config-file", "/loadbalancer/config.yaml", "config file")
+	configFile string
+	ifname     string
 	logLevel   slog.Level
 )
 
-func main() {
+func init() {
 	flag.TextVar(&logLevel, "log-level", slog.LevelInfo, "log level")
+	flag.StringVar(&ifname, "interface", "eth0", "interface to bind ebpf program to")
+	flag.StringVar(&configFile, "config-file", "/loadbalancer/config.yaml", "config file")
+}
+
+func main() {
 	config.AddToFlags(flag.CommandLine)
 	flag.Parse()
 	slog.SetLogLoggerLevel(logLevel)
@@ -40,20 +47,24 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer cancel()
 
-	ifname := "eth0" // Change this to an interface on your machine.
-	iface, err := netlink.LinkByName(ifname)
-	if err != nil {
-		return fmt.Errorf("getting interface %s: %w", ifname, err)
-	}
-
-	c, err := config.FromFile(*configFile)
+	c, err := config.FromFile(configFile)
 	if err != nil {
 		return fmt.Errorf("parsing config: %W", err)
 	}
 
 	slog.Debug("parsed config", "config", c)
 
-	bpfManager, err := bpf.New(c)
+	iface, err := netlink.LinkByName(ifname)
+	if err != nil {
+		return fmt.Errorf("getting interface %s: %w", ifname, err)
+	}
+
+	addr, err := net.AddressOfInterface(iface)
+	if err != nil {
+		return fmt.Errorf("getting address of interface %s: %w", iface, err)
+	}
+
+	bpfManager, err := bpf.New(c, addr)
 	if err != nil {
 		return fmt.Errorf("loading program: %w", err)
 	}
@@ -65,7 +76,7 @@ func run() error {
 
 	bpfManager.Run(ctx)
 
-	slog.Info("successfully attached program, waiting for signals...")
+	slog.Info("successfully attached program, waiting for signals...", "ifname", ifname, "address", addr)
 	<-ctx.Done()
 	return nil
 }

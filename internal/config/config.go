@@ -76,9 +76,9 @@ const (
 )
 
 type Listener struct {
-	Addr     netip.AddrPort `yaml:"address"`
-	Protocol Protocol       `yaml:"protocol"`
-	Backends []Backend      `yaml:"backends"`
+	Port     uint16    `yaml:"port"`
+	Protocol Protocol  `yaml:"protocol"`
+	Backends []Backend `yaml:"backends"`
 }
 
 // Protocol is a network protocol.
