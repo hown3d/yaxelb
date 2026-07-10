@@ -43,7 +43,7 @@ generate-linux-headers:
 
 
 compose-up:
-	docker compose up --build
+	hack/compose.sh up
 
 xdpdump:
 	./hack/tools/xdptools.sh xdpdump --container yaxelb-lb-1 -i eth0 -p load_balance --rx-capture=entry,exit -w - | docker run -i nicolaka/netshoot tcpdump -r - -nevvva

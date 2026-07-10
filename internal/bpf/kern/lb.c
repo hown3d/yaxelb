@@ -173,13 +173,15 @@ int load_balance(struct xdp_md *ctx) {
     goto out;
   }
 
-  if (parse_tcphdr(&cursor, data_end, &tcph) < 0) {
+  int ret = parse_tcphdr(&cursor, data_end, &tcph);
+  if (ret < 0) {
 #ifdef DEBUG
-    bpf_printk("bad tcp header");
+    bpf_printk("bad tcp header %d", ret);
 #endif
     action = XDP_ABORTED;
     goto out;
   }
+  __u16 tcp_len = (__u16)ret;
 
   bpf_printk("got tcp packet: src %pI4:%d dst %pI4:%d", &iph->saddr,
              bpf_ntohs(tcph->source), &iph->daddr, bpf_ntohs(tcph->dest));
@@ -200,24 +202,25 @@ int load_balance(struct xdp_md *ctx) {
                bpf_ntohs(conn->dst_port));
 #endif
 
-    struct tcphdr tcph_old = *tcph;
-    tcph->source =
-        conn->dst_port; // original dst port (load balancer listener port)
-    tcph->dest = conn->src_port; // original src port (client src port)
-    int tcpcsum = tcp_csum(tcph_old.check, &tcph_old, tcph);
-    if (tcpcsum < 0) {
-#ifdef DEBUG
-      bpf_printk("failed to update tcp checksum");
-#endif
-      action = XDP_ABORTED;
-      goto out;
-    }
-    tcph->check = tcpcsum;
+    __be32 old_saddr = iph->saddr;
+    __be32 old_daddr = iph->daddr;
+    __be32 old_sport = tcph->source;
+    __be32 old_dport = tcph->dest;
 
     iph->saddr = conn->dst_ip.s_addr; // original dst ip (load balancer)
     iph->daddr = conn->src_ip.s_addr; // original source ip (client)
     // recalc checksum
     iph->check = iph_csum(iph);
+
+    tcph->source =
+        conn->dst_port; // original dst port (load balancer listener port)
+    tcph->dest = conn->src_port; // original src port (client src port)
+
+    // calculate tcp checksum
+    tcph->check =
+        tcp_csum(tcph, iph, old_saddr, old_daddr, old_sport, old_dport);
+
+    bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(tcph->check));
   } else {
     int ret = select_backend(&in, &backend);
     if (ret < 0) {
@@ -274,22 +277,22 @@ int load_balance(struct xdp_md *ctx) {
       goto out;
     }
 
-    struct tcphdr tcph_old = *tcph;
-    tcph->dest = backend->port;
-    int tcpcsum = tcp_csum(tcph_old.check, &tcph_old, tcph);
-    if (tcpcsum < 0) {
-#ifdef DEBUG
-      bpf_printk("failed to update tcp checksum");
-#endif
-      action = XDP_ABORTED;
-      goto out;
-    }
-    tcph->check = tcpcsum;
+    __be32 old_saddr = iph->saddr;
+    __be32 old_daddr = iph->daddr;
+    __be32 old_sport = tcph->source;
+    __be32 old_dport = tcph->dest;
 
     iph->saddr = iph->daddr;
     iph->daddr = backend->ip.s_addr;
     // recalc checksum
     iph->check = iph_csum(iph);
+
+    tcph->dest = backend->port;
+
+    // calculate tcp checksum
+    tcph->check =
+        tcp_csum(tcph, iph, old_saddr, old_daddr, old_sport, old_dport);
+    bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(tcph->check));
   }
 
   action = fib_lookup_v4(ctx, eth, iph);

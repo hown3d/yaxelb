@@ -1,3 +1,4 @@
+#include "../consts.h"
 #include "vmlinux.h"
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
@@ -33,6 +34,12 @@ static __always_inline int parse_iphdr(struct hdr_cursor *cursor,
   if (iph + 1 > data_end)
     return -1;
 
+  if (iph->ihl != 5) {
+    // if len of ipv4 hdr is not equal to 20bytes that means that header
+    // contains ip options, and we dont support
+    return -1;
+  }
+
   hdrsize = iph->ihl * 4;
   /* Sanity check packet field is valid */
   if (hdrsize < sizeof(*iph))
@@ -47,26 +54,33 @@ static __always_inline int parse_iphdr(struct hdr_cursor *cursor,
   return iph->protocol;
 }
 
+#define TCP_MAXLEN 60
+
+enum hdr_parse_err {
+  ERR_INVALID_LEN = 1,
+  ERR_TOO_LONG = 2,
+};
+
 static __always_inline int parse_tcphdr(struct hdr_cursor *cursor,
                                         void *data_end,
                                         struct tcphdr **tcphdr) {
-  int len;
-  struct tcphdr *h = cursor->pos;
+  __u16 len;
+  struct tcphdr *tcph = cursor->pos;
 
-  if (h + 1 > data_end)
-    return -1;
+  if (tcph + 1 > data_end)
+    return -ERR_INVALID_LEN;
 
-  len = h->doff * 4;
+  len = tcph->doff * 4;
   /* Sanity check packet field is valid */
-  if (len < sizeof(*h))
-    return -1;
+  if (len < sizeof(*tcph) || len > TCP_MAXLEN)
+    return -ERR_INVALID_LEN;
 
   /* Variable-length TCP header, need to use byte-based arithmetic */
   if (cursor->pos + len > data_end)
-    return -1;
+    return -ERR_TOO_LONG;
 
   cursor->pos += len;
-  *tcphdr = h;
+  *tcphdr = tcph;
 
   return len;
 }
