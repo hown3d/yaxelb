@@ -34,6 +34,9 @@ func New(conf *config.Config, addr netip.Addr) (*Manager, error) {
 	if err := spec.LoadAndAssign(&objs, nil); err != nil {
 		var verifierErr *ebpf.VerifierError
 		if errors.As(err, &verifierErr) {
+			if err := writeVerifierLog(verifierErr); err != nil {
+				slog.Default().Error("writing verifier error", "error", err)
+			}
 			// print as %+v to get the full error log
 			return nil, fmt.Errorf("verifier error from kernel: %+v", verifierErr)
 		}

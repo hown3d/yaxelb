@@ -18,9 +18,6 @@ jobs:
         
     runs-on: ${{ matrix.os }}
 
-    permissions:
-      checks: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -46,4 +43,13 @@ jobs:
         with:
           files: "test-results.xml"
           comment_mode: off
-          check_name: "E2E Test results (${{ matrix.os }})"
+          check_run: false
+
+      - name: Publish Verifier error logs as artifacts
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verifier-log
+          path: /tmp/verifier-*.log
+          if-no-files-found: ignore
+          archive: false

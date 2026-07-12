@@ -78,6 +78,7 @@ services:
         BASE_IMAGE: nicolaka/netshoot
     volumes:
       - ./examples/config.yaml:/loadbalancer/config.yaml
+      - /tmp:/tmp/yaxelb
     command:
       - -log-level=debug
       - -enable-healthcheck=false
