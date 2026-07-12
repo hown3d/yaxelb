@@ -49,7 +49,7 @@ func run() error {
 
 	c, err := config.FromFile(configFile)
 	if err != nil {
-		return fmt.Errorf("parsing config: %W", err)
+		return fmt.Errorf("parsing config: %w", err)
 	}
 
 	slog.Debug("parsed config", "config", c)
