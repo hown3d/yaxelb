@@ -41,6 +41,8 @@ generate-linux-headers:
 	cp -R /tmp/linux/usr/include/asm* $(INCLUDE_FOLDER)
 	rm -r linuxkit
 
+compile-test-e2e:
+	GOOS=linux GOARCH=$(ARCH) go test -c ./test/e2e/...
 
 compose-up:
 	hack/compose.sh up
