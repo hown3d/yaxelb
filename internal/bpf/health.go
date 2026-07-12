@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strings"
 
 	"yaxelb/internal/config"
@@ -13,15 +14,15 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-func (m *Manager) newBackendHealthUpdater(listener config.Listener, healthManager *healthcheck.Manager) (*backendHealthUpdater, error) {
-	listenerKey := (lbListenerEntry{}).FromConfig(listener)
+func (m *Manager) newBackendHealthUpdater(listener config.Listener, addr netip.Addr, healthManager *healthcheck.Manager) (*backendHealthUpdater, error) {
+	listenerKey := (lbListenerEntry{}).FromConfig(listener, addr)
 	var backendMap *ebpf.Map
 	if err := m.objs.ListenerMap.Lookup(listenerKey, &backendMap); err != nil {
 		return nil, err
 	}
 	log := m.log.
 		WithGroup("healthcheck").
-		With("listener", fmt.Sprintf("%s://%s", listener.Protocol.GoNetwork(), listener.Addr))
+		With("listener", fmt.Sprintf("%s://%s:%d", listener.Protocol.GoNetwork(), addr, listener.Port))
 	log.Debug("retrieved backend map", "map", backendMap.String())
 	return &backendHealthUpdater{
 		healthManager: healthManager,

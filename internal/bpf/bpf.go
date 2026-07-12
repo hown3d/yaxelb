@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"sync"
 
 	"yaxelb/internal/config"
@@ -22,7 +23,7 @@ type Manager struct {
 	xdpLink         link.Link
 }
 
-func New(conf *config.Config) (*Manager, error) {
+func New(conf *config.Config, addr netip.Addr) (*Manager, error) {
 	spec, err := loadLb()
 	if err != nil {
 		return nil, err
@@ -50,21 +51,21 @@ func New(conf *config.Config) (*Manager, error) {
 	}
 
 	for _, l := range conf.Listeners {
-		if err := m.populateListenerMap(l, func() (*ebpf.Map, error) {
+		if err := m.populateListenerMap(l, addr, func() (*ebpf.Map, error) {
 			return newBackendMap(spec.Maps["listener_map"])
 		}); err != nil {
 			m.Close()
 			return nil, err
 		}
 
-		if err := m.populateNumBackendMap(l); err != nil {
+		if err := m.populateNumBackendMap(l, addr); err != nil {
 			m.Close()
 			return nil, err
 		}
 
 		if conf.HealthchecksEnabled() {
 			healthManager := healthcheck.NewManager(m.log, l.Backends, l.Protocol)
-			updater, err := m.newBackendHealthUpdater(l, healthManager)
+			updater, err := m.newBackendHealthUpdater(l, addr, healthManager)
 			if err != nil {
 				return nil, fmt.Errorf("creating backend health updater: %w", err)
 			}
@@ -112,7 +113,7 @@ func (m *Manager) Close() error {
 	return err
 }
 
-func (m *Manager) populateListenerMap(lis config.Listener, backendMapFunc func() (*ebpf.Map, error)) error {
+func (m *Manager) populateListenerMap(lis config.Listener, addr netip.Addr, backendMapFunc func() (*ebpf.Map, error)) error {
 	backendMap, err := backendMapFunc()
 	if err != nil {
 		return err
@@ -127,15 +128,15 @@ func (m *Manager) populateListenerMap(lis config.Listener, backendMapFunc func()
 		}
 	}
 
-	key := (lbListenerEntry{}).FromConfig(lis)
+	key := (lbListenerEntry{}).FromConfig(lis, addr)
 	if err := m.objs.ListenerMap.Put(key, uint32(backendMap.FD())); err != nil {
 		return fmt.Errorf("store backend map for listener %+v: %w", lis, err)
 	}
 	return nil
 }
 
-func (m *Manager) populateNumBackendMap(lis config.Listener) error {
-	key := (lbListenerEntry{}).FromConfig(lis)
+func (m *Manager) populateNumBackendMap(lis config.Listener, addr netip.Addr) error {
+	key := (lbListenerEntry{}).FromConfig(lis, addr)
 	return m.objs.NumBackends.Put(key, uint16(len(lis.Backends)))
 }
 

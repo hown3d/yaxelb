@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"net/netip"
@@ -8,16 +9,45 @@ import (
 	"strings"
 
 	"github.com/cilium/ebpf/link"
+	"github.com/go-playground/validator/v10"
 	"github.com/goccy/go-yaml"
 	"golang.org/x/sys/unix"
 )
 
+var validate = validator.New()
+
 type Config struct {
-	Algorithm Algorithm  `yaml:"algorithm"`
-	Listeners []Listener `yaml:"listeners"`
+	// Algorithm defaults to random if unspecified
+	Algorithm Algorithm `yaml:"algorithm" validate:"oneof=hash random"`
+	Listeners Listeners `yaml:"listeners" validate:"validateFn"`
 
 	healthcheck healthcheck
-	XdpMode     XDPMode
+	XdpMode     XDPMode `validate:"oneof=generic driver"`
+}
+
+type Listeners []Listener
+
+func (l Listeners) Validate() error {
+	type key struct {
+		port  uint16
+		proto string
+	}
+	var errs error
+	uniqueMap := map[key]int{}
+	for i, lis := range l {
+		errs = errors.Join(errs, validate.Struct(lis))
+		k := key{
+			port:  lis.Port,
+			proto: string(lis.Protocol),
+		}
+		idx, ok := uniqueMap[k]
+		if ok {
+			errs = errors.Join(errs, fmt.Errorf("duplicate port + protocol found on Listener %d and %d", i, idx))
+			continue
+		}
+		uniqueMap[k] = idx
+	}
+	return errs
 }
 
 var flagConfig Config
@@ -76,9 +106,10 @@ const (
 )
 
 type Listener struct {
-	Addr     netip.AddrPort `yaml:"address"`
-	Protocol Protocol       `yaml:"protocol"`
-	Backends []Backend      `yaml:"backends"`
+	Port uint16 `yaml:"port" validate:"required"`
+	// Protocol is TCP if unspecified
+	Protocol Protocol  `yaml:"protocol" validate:"oneof=TCP UDP"`
+	Backends []Backend `yaml:"backends"`
 }
 
 // Protocol is a network protocol.
@@ -92,7 +123,7 @@ const (
 
 func (p *Protocol) UnmarshalYAML(data []byte) error {
 	switch strings.TrimSpace(strings.ToUpper(string(data))) {
-	case string(TCP):
+	case string(TCP), "":
 		*p = TCP
 	case string(UDP):
 		*p = UDP
@@ -117,7 +148,7 @@ func (p Protocol) GoNetwork() string {
 }
 
 type Backend struct {
-	Addr netip.AddrPort `yaml:"address"`
+	Addr netip.AddrPort `yaml:"address" validate:"required"`
 }
 
 func FromFile(path string) (*Config, error) {
@@ -127,8 +158,8 @@ func FromFile(path string) (*Config, error) {
 	}
 	// use flags as default
 	c := flagConfig
-	if err := yaml.NewDecoder(f).Decode(&c); err != nil {
-		return nil, err
+	if err := yaml.NewDecoder(f, yaml.Strict(), yaml.Validator(validate)).Decode(&c); err != nil {
+		return nil, fmt.Errorf("decoding yaml: %w", err)
 	}
 	return &c, nil
 }
