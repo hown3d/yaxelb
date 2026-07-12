@@ -115,7 +115,7 @@ select_backend(struct five_tuple_t *five_tuple, struct backend **backend) {
   default:
     return -ERR_UNKNOWN_ALGORITHM;
   }
-#ifdef DEBUG
+#if DEBUG >= DEBUG_MEDIUM
   bpf_printk("backend idx: %x", index);
 #endif
   *backend = bpf_map_lookup_elem(backend_map, &index);
@@ -146,28 +146,28 @@ int load_balance(struct xdp_md *ctx) {
 
   eth_type = parse_ethhdr(&cursor, data_end, &eth);
   if (eth_type < 0) {
-#ifdef DEBUG
+#if DEBUG >= DEBUG_HIGH
     bpf_printk("error parsing ethhdr");
 #endif
     goto out;
   }
   if (eth_type != bpf_htons(ETH_P_IP)) {
-#ifdef DEBUG
-    bpf_printk("eth proto is not ip, got 0x%x", bpf_ntohs(eth_type));
+#if DEBUG >= DEBUG_HIGH
+    bpf_printk("ip proto is not tcp, got %d", ip_type);
 #endif
     goto out;
   }
 
   ip_type = parse_iphdr(&cursor, data_end, &iph);
   if (ip_type < 0) {
-#ifdef DEBUG
-    bpf_printk("error parsing iphdr");
+#if DEBUG >= DEBUG_HIGH
+    bpf_printk("ip proto is not tcp, got %d", ip_type);
 #endif
     goto out;
   }
 
   if (ip_type != IPPROTO_TCP) {
-#ifdef DEBUG
+#if DEBUG >= DEBUG_HIGH
     bpf_printk("ip proto is not tcp, got %d", ip_type);
 #endif
     goto out;
@@ -175,7 +175,7 @@ int load_balance(struct xdp_md *ctx) {
 
   int ret = parse_tcphdr(&cursor, data_end, &tcph);
   if (ret < 0) {
-#ifdef DEBUG
+#if DEBUG >= DEBUG_HIGH
     bpf_printk("bad tcp header %d", ret);
 #endif
     action = XDP_ABORTED;
@@ -183,8 +183,10 @@ int load_balance(struct xdp_md *ctx) {
   }
   __u16 tcp_len = (__u16)ret;
 
+#if DEBUG >= DEBUG_HIGH
   bpf_printk("got tcp packet: src %pI4:%d dst %pI4:%d", &iph->saddr,
              bpf_ntohs(tcph->source), &iph->daddr, bpf_ntohs(tcph->dest));
+#endif
 
   struct five_tuple_t in = {
       .src_ip = iph->saddr,
@@ -193,10 +195,14 @@ int load_balance(struct xdp_md *ctx) {
       .src_port = tcph->source,
       .protocol = ip_type,
   };
+  bpf_printk("checking conntrack for key: in={ .src_ip: %pI4, .dst_ip = "
+             "%pI4, .src_port: %d, .dst_port: %d, .protocol: %d }",
+             &in.src_ip, &in.dst_ip, bpf_ntohs(in.src_port),
+             bpf_ntohs(in.dst_port), in.protocol);
 
   struct conntrack_entry *conn = bpf_map_lookup_elem(&conntrack, &in);
   if (conn) {
-#ifdef DEBUG
+#if DEBUG >= DEBUG_LOW
     bpf_printk("conntrack entry for entry found: %pI4:%d -> %pI4:%d",
                &conn->src_ip, bpf_ntohs(conn->src_port), &conn->dst_ip,
                bpf_ntohs(conn->dst_port));
@@ -227,17 +233,23 @@ int load_balance(struct xdp_md *ctx) {
       if (ret == -ERR_LISTENER_NOT_FOUND) {
         // To ensure we don't drop returning packets from connections the LB
         // created, we will just let the kernel handle such packets.
-        action = lookup_kernel_conntrack(ctx, iph->saddr, tcph->source,
-                                         iph->daddr, tcph->dest, ip_type);
-        if (action == XDP_ABORTED) {
-#ifdef DEBUG
-          bpf_printk("listener { .ip = %pI4, .port = %d, .protocol = %d}"
-                     "not found in listener_map",
-                     &in.dst_ip, bpf_ntohs(in.dst_port), in.protocol);
+        int conntrack_ret = lookup_kernel_conntrack(
+            ctx, iph->saddr, tcph->source, iph->daddr, tcph->dest, ip_type);
+        if (conntrack_ret < 0) {
+          if (conntrack_ret == -CONNTRACK_NOT_FOUND) {
+#if DEBUG >= DEBUG_MEDIUM
+            bpf_printk("listener { .ip = %pI4, .port = %d, .protocol = %d} "
+                       "not found in listener_map",
+                       &in.dst_ip, bpf_ntohs(in.dst_port), in.protocol);
 #endif
+            action = XDP_PASS;
+          } else {
+            action = XDP_ABORTED;
+          }
+          goto out;
         }
-        goto out;
       }
+
       bpf_printk("error selecting backend: %d", ret);
       action = XDP_ABORTED;
       goto out;
@@ -248,7 +260,7 @@ int load_balance(struct xdp_md *ctx) {
       goto out;
     }
 
-#ifdef DEBUG
+#if DEBUG >= DEBUG_LOW
     bpf_printk("new backend: %pI4:%d", &backend->ip, bpf_ntohs(backend->port));
 #endif
 
@@ -258,17 +270,28 @@ int load_balance(struct xdp_md *ctx) {
     struct five_tuple_t in_loadbalancer = {
         .src_ip = backend->ip, // Backend IP
         .dst_ip = iph->daddr,  //  LB IP
-        .dst_port = tcph->source,
         .src_port = backend->port,
+        .dst_port = tcph->source,
         .protocol = ip_type,
     };
-
     struct conntrack_entry new_conn = {
         .src_ip.s_addr = iph->saddr,
         .dst_ip.s_addr = iph->daddr,
         .src_port = tcph->source,
         .dst_port = tcph->dest,
     };
+
+    bpf_printk(
+        "storing conntrack key: in_loadbalancer={ .src_ip: %pI4, .dst_ip = "
+        "%pI4, .src_port: %d, .dst_port: %d, .protocol: %d }",
+        &in_loadbalancer.src_ip, &in_loadbalancer.dst_ip,
+        bpf_ntohs(in_loadbalancer.src_port),
+        bpf_ntohs(in_loadbalancer.dst_port), in_loadbalancer.protocol);
+
+    bpf_printk("storing conntrack value: new_conn={ .src_ip: %pI4, .dst_ip = "
+               "%pI4, .src_port: %d, .dst_port: %d }",
+               &new_conn.src_ip, &new_conn.dst_ip, bpf_ntohs(new_conn.src_port),
+               bpf_ntohs(new_conn.dst_port));
 
     if (bpf_map_update_elem(&conntrack, &in_loadbalancer, &new_conn, BPF_ANY) <
         0) {
@@ -297,7 +320,7 @@ int load_balance(struct xdp_md *ctx) {
 
   action = fib_lookup_v4(ctx, eth, iph);
 out:
-#ifdef DEBUG
+#if DEBUG >= DEBUG_MEDIUM
   bpf_printk("action %d", action);
 #endif
   return action;

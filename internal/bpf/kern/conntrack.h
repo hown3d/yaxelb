@@ -3,10 +3,14 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 
-static __always_inline int lookup_kernel_conntrack(struct xdp_md *ctx,
-                                                   __be32 saddr, __be16 sport,
-                                                   __be32 daddr, __be16 dport,
-                                                   u8 proto) {
+enum conntrack_error {
+  CONNTRACK_NOT_FOUND = 1,
+  CONNTRACK_LOOKUP_ERROR = 2,
+};
+
+static __always_inline enum conntrack_error
+lookup_kernel_conntrack(struct xdp_md *ctx, __be32 saddr, __be16 sport,
+                        __be32 daddr, __be16 dport, u8 proto) {
   struct bpf_sock_tuple tuple;
   tuple.ipv4.saddr = saddr;
   tuple.ipv4.sport = sport;
@@ -25,23 +29,23 @@ static __always_inline int lookup_kernel_conntrack(struct xdp_md *ctx,
 
     bpf_printk("error in conntrack lookup for %pI4:%d->%pI4:%d : %d", &saddr,
                bpf_ntohs(sport), &daddr, bpf_ntohs(dport), ct_opts.error);
-    return XDP_ABORTED;
+    return -CONNTRACK_LOOKUP_ERROR;
   }
 
   if (ct) {
     bpf_ct_release(ct);
     // Connection exists, allow the packet
-#ifdef DEBUG
+#if DEBUG >= DEBUG_MEDIUM
     bpf_printk("found kernel conntrack entry for %pI4:%d->%pI4:%d", &saddr,
                bpf_ntohs(sport), &daddr, bpf_ntohs(dport));
 #endif
-    return XDP_PASS;
+    return 0;
   } else {
   notfound:
-#ifdef DEBUG
+#if DEBUG >= DEBUG_HIGH
     bpf_printk("kernel conntrack entry for %pI4:%d->%pI4:%d not found", &saddr,
                bpf_ntohs(sport), &daddr, bpf_ntohs(dport));
 #endif
-    return XDP_ABORTED;
+    return -CONNTRACK_NOT_FOUND;
   }
 }

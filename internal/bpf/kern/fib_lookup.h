@@ -25,7 +25,7 @@ static int __always_inline fib_lookup_v4(struct xdp_md *ctx, struct ethhdr *eth,
   case BPF_FIB_LKUP_RET_SUCCESS: /* lookup successful */
     __builtin_memcpy(eth->h_source, fib_params.smac, sizeof(fib_params.smac));
     __builtin_memcpy(eth->h_dest, fib_params.dmac, sizeof(fib_params.dmac));
-#ifdef DEBUG
+#if DEBUG >= DEBUG_LOW
     bpf_printk("FIB lookup returned success");
     bpf_printk("FIB lookup: recieved smac: %02x:%02x:%02x:%02x:%02x:%02x",
                fib_params.smac[0], fib_params.smac[1], fib_params.smac[2],
