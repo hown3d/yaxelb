@@ -318,6 +318,9 @@ int load_balance(struct xdp_md *ctx) {
     bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(tcph->check));
   }
 
+#if DEBUG >= DEBUG_MEDIUM
+  bpf_printk("fib lookup");
+#endif
   action = fib_lookup_v4(ctx, eth, iph);
 out:
 #if DEBUG >= DEBUG_MEDIUM
