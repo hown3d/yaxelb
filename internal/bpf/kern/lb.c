@@ -246,8 +246,9 @@ int load_balance(struct xdp_md *ctx) {
           } else {
             action = XDP_ABORTED;
           }
-          goto out;
         }
+
+        goto out;
       }
 
       bpf_printk("error selecting backend: %d", ret);
