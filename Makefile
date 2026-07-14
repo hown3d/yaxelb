@@ -38,6 +38,13 @@ generate-btf-headers:
 		-v /sys/kernel/btf:/sys/kernel/btf \
 		bpftool btf dump file /sys/kernel/btf/nf_conntrack format c > $(INCLUDE_FOLDER)/vmlinux.h
 
+GOFLAGS := 
+build:
+	go build -o yaxelb $(GOFLAGS) ./cmd/main.go
+
+build-debug: GOFLAGS := "-gcflags=all=-N -l"
+build-debug: build
+
 build-libbpf-image:
 	docker build -t libbpf --target libbpf .
 
