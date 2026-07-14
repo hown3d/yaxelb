@@ -31,7 +31,7 @@ func New(conf *config.Config, addr netip.Addr) (*Manager, error) {
 
 	// Load the compiled eBPF ELF and load it into the kernel.
 	var objs lbObjects
-	if err := spec.LoadAndAssign(&objs, nil); err != nil {
+	if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{}); err != nil {
 		var verifierErr *ebpf.VerifierError
 		if errors.As(err, &verifierErr) {
 			if err := writeVerifierLog(verifierErr); err != nil {

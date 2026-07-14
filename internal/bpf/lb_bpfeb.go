@@ -58,6 +58,17 @@ type lbListenerEntry struct {
 	Pad      [1]uint8
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	lbMapConntrack    = "conntrack"
+	lbMapListenerMap  = "listener_map"
+	lbMapNumBackends  = "num_backends"
+	lbProgLoadBalance = "load_balance"
+	lbVarLbAlgo       = "lb_algo"
+)
+
 // loadLb returns the embedded CollectionSpec for lb.
 func loadLb() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_LbBytes)
@@ -78,7 +89,7 @@ func loadLb() (*ebpf.CollectionSpec, error) {
 //	*lbMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func loadLbObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func loadLbObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := loadLb()
 	if err != nil {
 		return err
