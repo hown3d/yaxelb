@@ -1,16 +1,34 @@
 export KERNEL_VERSION = 6.12.59
 export ARCH = $(shell uname -m)
-
+KERNEL := $(shell uname -s)
 INCLUDE_FOLDER = "internal/bpf/kern/include"
-generate: go-generate
 
-go-generate:
+generate: generate-go
+
+ifeq ($(KERNEL), Linux)
+generate-go: generate-ebpf
+else
+generate-go: generate-ebpf-in-docker
+endif
+
+generate-ebpf-in-docker:
 	docker build -t compile --target compile -f Dockerfile.bpf .
-	docker run -ti -v $(PWD):/work -w /work compile go generate ./...
+	docker run -ti -v $(shell pwd):/work -w /work compile go generate ./...
 
+generate-ebpf:
+	go generate ./...
 
-ebpf-test:
-	docker run --privileged -v $(shell go env GOMODCACHE):/go/pkg/mod -v $(PWD):/src -v /sys/kernel/tracing:/sys/kernel/tracing:rw -w /src golang go test -v ./internal/bpf/...
+ifeq ($(KERNEL), Linux)
+test-integration: 
+else
+test-integration: test-epbf-in-docker
+endif
+
+test-ebpf:
+	go test -exec "sudo" -v ./internal/bpf/...
+
+test-ebpf-in-docker:
+	docker run --privileged -v $(shell go env GOMODCACHE):/go/pkg/mod -v $(shell pwd):/src -v /sys/kernel/tracing:/sys/kernel/tracing:rw -w /src golang go test -v ./internal/bpf/...
 
 generate-btf-headers:
 	docker build -t bpftool https://github.com/libbpf/bpftool.git#main
