@@ -79,6 +79,9 @@ func (x *XDPMode) Set(v string) error {
 
 // String implements [flag.Value].
 func (x *XDPMode) String() string {
+	if x == nil || *x == "" {
+		*x = XDPModeGeneric
+	}
 	return string(*x)
 }
 
