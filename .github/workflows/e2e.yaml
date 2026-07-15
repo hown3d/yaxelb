@@ -19,7 +19,11 @@ jobs:
     strategy:
       fail-fast: false 
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04]
+        os: 
+        # ubuntu 22 currently does not work as the bpf_xdp_ct_lookup kfunc is not yet available in this kernel.
+        # - ubuntu-22.04
+        - ubuntu-24.04
+        - ubuntu-26.04
         
     runs-on: ${{ matrix.os }}
 
