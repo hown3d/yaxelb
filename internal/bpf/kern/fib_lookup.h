@@ -21,6 +21,7 @@ static int __always_inline fib_lookup_v4(struct xdp_md *ctx, struct ethhdr *eth,
   fib_params.ipv4_dst = ip4->daddr;
 
   int ret = bpf_fib_lookup(ctx, &fib_params, sizeof(fib_params), 0);
+  bpf_printk("fib lookup code: %d", ret);
   switch (ret) {
   case BPF_FIB_LKUP_RET_SUCCESS: /* lookup successful */
     __builtin_memcpy(eth->h_source, fib_params.smac, sizeof(fib_params.smac));
@@ -46,7 +47,6 @@ static int __always_inline fib_lookup_v4(struct xdp_md *ctx, struct ethhdr *eth,
     return XDP_DROP;
   case BPF_FIB_LKUP_RET_NO_NEIGH:    /* no neighbor entry for nh */
   case BPF_FIB_LKUP_RET_FRAG_NEEDED: /* fragmentation required to fwd */
-    bpf_printk("fib lookup code: %d, passing", ret);
     return XDP_PASS;
   }
   bpf_printk("unknown fib lookup code: %d", ret);

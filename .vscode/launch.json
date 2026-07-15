@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run as root",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/yaxelb",
+            "args": [
+                "-config-file", "${workspaceFolder}/examples/config.yaml",
+                "-interface", "dummy0",
+            ],
+            "asRoot": true
+        }
+    ]
+}
