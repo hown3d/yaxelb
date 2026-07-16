@@ -5,8 +5,10 @@ package bpf
 import (
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/netip"
+	"os"
 	"syscall"
 	"testing"
 
@@ -29,31 +31,58 @@ const (
 	XDP_REDIRECT
 )
 
-func TestManager_Loadbalance(t *testing.T) {
-	kernelTraceReader, err := testutil.KernelTraceReader()
-	if err != nil {
-		t.Fatalf("creating kernel trace reader: %s", err)
+var (
+	backends = map[netip.Addr]net.HardwareAddr{
+		netip.MustParseAddr("10.0.4.10"): must(testutil.GenerateRandMAC),
+		netip.MustParseAddr("10.0.4.11"): must(testutil.GenerateRandMAC),
 	}
-
-	backend1IP := netip.MustParseAddr("10.0.4.10")
-	backend1Mac := must(t, testutil.GenerateRandMAC)
-	backend2IP := netip.MustParseAddr("10.0.4.11")
-	backend2Mac := must(t, testutil.GenerateRandMAC)
-
-	backends := map[netip.Addr]net.HardwareAddr{
-		backend1IP: backend1Mac,
-		backend2IP: backend2Mac,
-	}
-
-	lbIP := netip.MustParseAddr("10.0.4.2")
-	lbMac := must(t, testutil.GenerateRandMAC)
-	lbLink := &netlink.Veth{
+	lbIP   = netip.MustParseAddr("10.0.4.2")
+	lbMac  = must(testutil.GenerateRandMAC)
+	lbLink = &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{
 			Name:         "lb",
 			HardwareAddr: lbMac,
 		},
 		PeerName: "lb-peer",
 	}
+	kernelTraceReader *testutil.KernelTracer
+)
+
+func TestMain(m *testing.M) {
+	os.Exit(runTest(m))
+}
+
+func runTest(m *testing.M) int {
+	var err error
+	kernelTraceReader, err = testutil.KernelTraceReader()
+	if err != nil {
+		log.Printf("creating kernel trace reader: %s", err)
+		return -1
+	}
+	defer func() {
+		kernelTraceReader.Close()
+	}()
+
+	if err := setupTestLink(lbLink, lbIP); err != nil {
+		log.Printf("setup test link: %v", err)
+		return -1
+	}
+	defer func() {
+		netlink.LinkDel(lbLink)
+	}()
+
+	// add a source route to LB index to ensure our src mac is from lb device
+	if err := netlink.RouteAdd(&netlink.Route{
+		Src:       net.IP(lbIP.AsSlice()),
+		LinkIndex: lbLink.Index,
+	}); err != nil {
+		log.Printf("adding source route: %s", err)
+		return -1
+	}
+	return m.Run()
+}
+
+func TestLoadbalancer_Client(t *testing.T) {
 	conf := config.Config{
 		Algorithm: config.AlgorithmHash,
 		Listeners: config.Listeners{
@@ -70,35 +99,6 @@ func TestManager_Loadbalance(t *testing.T) {
 		})
 	}
 
-	srcInfo := packetInfo{
-		ip:   netip.MustParseAddr("10.0.4.42"),
-		port: 32112,
-	}
-	dstInfo := packetInfo{
-		ip:   lbIP,
-		mac:  lbMac,
-		port: 80,
-	}
-
-	inPacket, err := ipv4Packet(srcInfo, dstInfo)
-	if err != nil {
-		t.Fatalf("building ipv4 packet: %s", err)
-	}
-
-	if err := setupTestLink(lbLink, lbIP); err != nil {
-		t.Errorf("setup test link: %v", err)
-		return
-	}
-
-	// add a source route to LB index to ensure our src mac is from lb device
-	if err := netlink.RouteAdd(&netlink.Route{
-		Src:       net.IP(lbIP.AsSlice()),
-		LinkIndex: lbLink.Index,
-	}); err != nil {
-		t.Errorf("adding source route: %s", err)
-		return
-	}
-
 	// TODO: at the moment fib_lookup returns BPF_FIB_LKUP_RET_NO_NEIGH because they kernel does not know about the Mac of expectedNewDst yet.
 	// Create this entry in the neighbor table directly using netlink.NeighAdd.
 	for ip, mac := range backends {
@@ -113,56 +113,95 @@ func TestManager_Loadbalance(t *testing.T) {
 		}
 	}
 
-	t.Cleanup(func() {
-		traces, err := io.ReadAll(kernelTraceReader)
-		if err != nil {
-			t.Logf("WARNING: failed to read kernel traces: %s", err)
-		} else {
-			t.Logf("ebpf program traces:\n%s", traces)
-		}
-		if err := kernelTraceReader.Clear(); err != nil {
-			t.Logf("WARNING: unable to clear kernel traces: %s", err)
-		}
-		kernelTraceReader.Close()
-		netlink.LinkDel(lbLink)
-	})
+	var scenarios = []struct {
+		name                 string
+		srcInfo              packetInfo
+		dstInfo              packetInfo
+		expectedRet          uint32
+		additionalAssertions func(t *testing.T, retPacket gopacket.Packet)
+	}{
+		{
+			name:        "client to loadbalancer on listener port",
+			expectedRet: XDP_REDIRECT,
+			srcInfo: packetInfo{
+				ip:   netip.MustParseAddr("10.0.4.42"),
+				port: 32112,
+			},
+			dstInfo: packetInfo{
+				ip:   lbIP,
+				mac:  lbMac,
+				port: 80,
+			},
+			additionalAssertions: func(t *testing.T, retPacket gopacket.Packet) {
+				eth := retPacket.LinkLayer().(*layers.Ethernet)
+				ipv4 := retPacket.NetworkLayer().(*layers.IPv4)
+				assert.Equal(t, lbMac, eth.SrcMAC, "src MAC is not from LB link")
+				assert.Equal(t, lbIP.String(), ipv4.SrcIP.String(), "src IP is not LB")
 
-	var (
-		retPacket gopacket.Packet
-		ret       uint32
-	)
-	// CAP_SYS_ADMIN is required for using xdp_ct_lookup kfunc as it is from a kernel module.
-	testutil.WithCapabilities(t, []testutil.Capability{testutil.CAP_SYS_ADMIN}, func() {
-		m, err := New(&conf, lbIP)
-		if err != nil {
-			t.Fatalf("setup ebpf manager: %s", err)
-		}
-		t.Cleanup(func() {
-			m.Close()
+				mac, ok := backends[netip.MustParseAddr(ipv4.DstIP.String())]
+				assert.True(t, ok, "dst IP is a backend")
+				assert.Equal(t, mac, eth.DstMAC)
+			},
+		},
+		{
+			name:        "client to loadbalancer on port not listening",
+			expectedRet: XDP_DROP,
+			srcInfo: packetInfo{
+				ip:   netip.MustParseAddr("10.0.4.42"),
+				port: 32112,
+			},
+			dstInfo: packetInfo{
+				ip:   lbIP,
+				mac:  lbMac,
+				port: 12345,
+			},
+		},
+	}
+	for _, tt := range scenarios {
+		t.Run(tt.name, func(t *testing.T) {
+			inPacket, err := ipv4Packet(tt.srcInfo, tt.dstInfo)
+			if err != nil {
+				t.Fatalf("building ipv4 packet: %s", err)
+			}
+
+			t.Cleanup(func() {
+				traces, err := io.ReadAll(kernelTraceReader)
+				if err != nil {
+					t.Logf("WARNING: failed to read kernel traces: %s", err)
+				} else {
+					t.Logf("ebpf program traces:\n%s", traces)
+				}
+				if err := kernelTraceReader.Clear(); err != nil {
+					t.Logf("WARNING: unable to clear kernel traces: %s", err)
+				}
+			})
+
+			var (
+				retPacket gopacket.Packet
+				ret       uint32
+			)
+			// CAP_SYS_ADMIN is required for using xdp_ct_lookup kfunc as it is from a kernel module.
+			testutil.WithCapabilities(t, []testutil.Capability{testutil.CAP_SYS_ADMIN}, func() {
+				m, err := New(&conf, lbIP)
+				if err != nil {
+					t.Fatalf("setup ebpf manager: %s", err)
+				}
+				t.Cleanup(func() {
+					m.Close()
+				})
+
+				ret, retPacket, err = testEbpf(m.objs.LoadBalance, inPacket.packet.Data(), uint32(lbLink.Attrs().Index))
+				if err != nil {
+					t.Fatalf("testing ebpf program: %s", err)
+				}
+			})
+
+			assert.Equal(t, tt.expectedRet, ret, "xdp return code")
+			assertChecksum(t, retPacket)
+			if tt.additionalAssertions != nil {
+				tt.additionalAssertions(t, retPacket)
+			}
 		})
-
-		ret, retPacket, err = testEbpf(m.objs.LoadBalance, inPacket.packet.Data(), uint32(lbLink.Attrs().Index))
-		if err != nil {
-			t.Fatalf("testing ebpf program: %s", err)
-		}
-	})
-
-	assert.Equal(t, XDP_REDIRECT, ret, "xdp return code")
-	eth := retPacket.LinkLayer().(*layers.Ethernet)
-	ipv4 := retPacket.NetworkLayer().(*layers.IPv4)
-	assert.Equal(t, lbMac, eth.SrcMAC, "src MAC is not from LB link")
-	assert.Equal(t, lbIP.String(), ipv4.SrcIP.String(), "src IP is not LB")
-
-	mac, ok := backends[netip.MustParseAddr(ipv4.DstIP.String())]
-	assert.True(t, ok, "dst IP is a backend")
-	assert.Equal(t, mac, eth.DstMAC)
-
-	err, mismatchs := retPacket.VerifyChecksums()
-	assert.NoError(t, err, "checksum verification")
-	if !assert.Len(t, mismatchs, 0, "checksum mismatchs") {
-		for _, m := range mismatchs {
-			t.Logf("checksum verification failed on layer %s, correct csum is %04x, got %04x", m.Layer.LayerType(), m.Correct, m.Actual)
-		}
 	}
 
 }
@@ -175,6 +214,17 @@ type packetInfo struct {
 
 type packet struct {
 	packet gopacket.Packet
+}
+
+func assertChecksum(t *testing.T, packet gopacket.Packet) {
+	err, mismatchs := packet.VerifyChecksums()
+	assert.NoError(t, err, "checksum verification")
+	if !assert.Len(t, mismatchs, 0, "checksum mismatchs") {
+		for _, m := range mismatchs {
+			t.Logf("checksum verification failed on layer %s, correct csum is %04x, got %04x", m.Layer.LayerType(), m.Correct, m.Actual)
+		}
+	}
+
 }
 
 func ipv4Packet(src, dst packetInfo) (packet, error) {
@@ -257,10 +307,10 @@ func setupTestLink(l netlink.Link, ip netip.Addr) error {
 	return nil
 }
 
-func must[T any](t *testing.T, f func() (T, error)) T {
+func must[T any](f func() (T, error)) T {
 	obj, err := f()
 	if err != nil {
-		t.Fatal(err)
+		panic(err)
 	}
 	return obj
 }
