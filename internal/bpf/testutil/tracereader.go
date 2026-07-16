@@ -8,7 +8,7 @@ import (
 
 const kernelTraceFile = "/sys/kernel/tracing/trace"
 
-type kernelTraces struct {
+type KernelTracer struct {
 	f *os.File
 }
 
@@ -25,24 +25,24 @@ func PrintTraces(t *testing.T) {
 	}
 }
 
-func KernelTraceReader() (*kernelTraces, error) {
+func KernelTraceReader() (*KernelTracer, error) {
 	f, err := os.OpenFile(kernelTraceFile, os.O_RDONLY, 0o640)
 	if err != nil {
 		return nil, err
 	}
-	return &kernelTraces{
+	return &KernelTracer{
 		f: f,
 	}, nil
 }
 
-func (k kernelTraces) Read(b []byte) (n int, err error) {
+func (k KernelTracer) Read(b []byte) (n int, err error) {
 	return k.f.Read(b)
 }
 
-func (k kernelTraces) Clear() error {
+func (k KernelTracer) Clear() error {
 	return os.WriteFile(kernelTraceFile, []byte{}, 0o640)
 }
 
-func (k kernelTraces) Close() error {
+func (k KernelTracer) Close() error {
 	return k.f.Close()
 }

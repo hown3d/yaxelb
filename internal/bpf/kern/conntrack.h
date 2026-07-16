@@ -16,8 +16,17 @@ lookup_kernel_conntrack(struct xdp_md *ctx, __be32 saddr, __be16 sport,
   tuple.ipv4.sport = sport;
   tuple.ipv4.daddr = daddr;
   tuple.ipv4.dport = dport;
-  struct bpf_ct_opts ct_opts = {.netns_id = BPF_F_CURRENT_NETNS,
-                                .l4proto = proto};
+
+  // allocate here using declaration and assignment to not set fields to 0 which
+  // might be not available in older kernels. This ensures the loader will not
+  // poision our call as the structures might mismatch.
+  struct bpf_ct_opts ct_opts;
+  ct_opts.netns_id = BPF_F_CURRENT_NETNS;
+  ct_opts.l4proto = proto;
+
+  // NF_BPF_CT_OPTS_SZ changed in
+  // https://github.com/torvalds/linux/commit/ece4b296904167336d0aaab26bd7122018835202
+  // (6.11) to 16 by adding support for zone awareness.
   struct nf_conn *ct = bpf_xdp_ct_lookup(ctx, &tuple, sizeof(tuple.ipv4),
                                          &ct_opts, sizeof(ct_opts));
   if (ct_opts.error != 0) {

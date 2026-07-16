@@ -80,6 +80,55 @@ func (l lbListenerEntry) FromConfig(lis config.Listener, addr netip.Addr) lbList
 	return l
 }
 
+func (l lbConntrackEntry) MarshalBinary() (data []byte, err error) {
+	data = make([]byte, 12)
+	srcIPRaw, err := l.SrcIp.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal ip: %w", err)
+	}
+	data[0] = srcIPRaw[0]
+	data[1] = srcIPRaw[1]
+	data[2] = srcIPRaw[2]
+	data[3] = srcIPRaw[3]
+
+	dstIPRaw, err := l.DstIp.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal ip: %w", err)
+	}
+	data[4] = dstIPRaw[0]
+	data[5] = dstIPRaw[1]
+	data[6] = dstIPRaw[2]
+	data[7] = dstIPRaw[3]
+	NetworkOrder.PutUint16(data[8:10], l.SrcPort)
+	NetworkOrder.PutUint16(data[10:12], l.DstPort)
+	return data, nil
+}
+
+func (l lbFiveTupleT) MarshalBinary() (data []byte, err error) {
+	data = make([]byte, 16)
+	srcIPRaw, err := l.SrcIp.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal ip: %w", err)
+	}
+	data[0] = srcIPRaw[0]
+	data[1] = srcIPRaw[1]
+	data[2] = srcIPRaw[2]
+	data[3] = srcIPRaw[3]
+
+	dstIPRaw, err := l.DstIp.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal ip: %w", err)
+	}
+	data[4] = dstIPRaw[0]
+	data[5] = dstIPRaw[1]
+	data[6] = dstIPRaw[2]
+	data[7] = dstIPRaw[3]
+	NetworkOrder.PutUint16(data[8:10], l.SrcPort)
+	NetworkOrder.PutUint16(data[10:12], l.DstPort)
+	data[12] = l.Protocol
+	return data, nil
+}
+
 // MarshalBinary implements encoding.BinaryMarshaler.
 func (l lbBackend) MarshalBinary() (data []byte, err error) {
 	data = make([]byte, 8)

@@ -236,15 +236,13 @@ int load_balance(struct xdp_md *ctx) {
         int conntrack_ret = lookup_kernel_conntrack(
             ctx, iph->saddr, tcph->source, iph->daddr, tcph->dest, ip_type);
         if (conntrack_ret < 0) {
+          action = XDP_DROP;
           if (conntrack_ret == -CONNTRACK_NOT_FOUND) {
 #if DEBUG >= DEBUG_MEDIUM
             bpf_printk("listener { .ip = %pI4, .port = %d, .protocol = %d} "
                        "not found in listener_map",
                        &in.dst_ip, bpf_ntohs(in.dst_port), in.protocol);
 #endif
-            action = XDP_PASS;
-          } else {
-            action = XDP_ABORTED;
           }
         }
 
