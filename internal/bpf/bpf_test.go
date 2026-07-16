@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"syscall"
 	"testing"
 
@@ -36,9 +38,10 @@ var (
 		netip.MustParseAddr("10.0.4.10"): must(testutil.GenerateRandMAC),
 		netip.MustParseAddr("10.0.4.11"): must(testutil.GenerateRandMAC),
 	}
-	lbIP   = netip.MustParseAddr("10.0.4.2")
-	lbMac  = must(testutil.GenerateRandMAC)
-	lbLink = &netlink.Veth{
+	clientIP = netip.MustParseAddr("10.0.4.42")
+	lbIP     = netip.MustParseAddr("10.0.4.2")
+	lbMac    = must(testutil.GenerateRandMAC)
+	lbLink   = &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{
 			Name:         "lb",
 			HardwareAddr: lbMac,
@@ -99,8 +102,8 @@ func TestLoadbalancer_Client(t *testing.T) {
 		})
 	}
 
-	// TODO: at the moment fib_lookup returns BPF_FIB_LKUP_RET_NO_NEIGH because they kernel does not know about the Mac of expectedNewDst yet.
-	// Create this entry in the neighbor table directly using netlink.NeighAdd.
+	// Without this entry fib_lookup returns BPF_FIB_LKUP_RET_NO_NEIGH because they kernel does not know about the mac of the backends yet.
+	// Create this entry in the neighbor table directly to mock ARP resolution.
 	for ip, mac := range backends {
 		if err := netlink.NeighAdd(&netlink.Neigh{
 			LinkIndex:    lbLink.Index,
@@ -147,7 +150,7 @@ func TestLoadbalancer_Client(t *testing.T) {
 			name:        "client to loadbalancer on port not listening",
 			expectedRet: XDP_DROP,
 			srcInfo: packetInfo{
-				ip:   netip.MustParseAddr("10.0.4.42"),
+				ip:   clientIP,
 				port: 32112,
 			},
 			dstInfo: packetInfo{
@@ -189,6 +192,132 @@ func TestLoadbalancer_Client(t *testing.T) {
 				t.Cleanup(func() {
 					m.Close()
 				})
+
+				ret, retPacket, err = testEbpf(m.objs.LoadBalance, inPacket.packet.Data(), uint32(lbLink.Attrs().Index))
+				if err != nil {
+					t.Fatalf("testing ebpf program: %s", err)
+				}
+			})
+
+			assert.Equal(t, tt.expectedRet, ret, "xdp return code")
+			assertChecksum(t, retPacket)
+			if tt.additionalAssertions != nil {
+				tt.additionalAssertions(t, retPacket)
+			}
+		})
+	}
+}
+
+func TestLoadbalancer_BackendReturn(t *testing.T) {
+	conf := config.Config{
+		Algorithm: config.AlgorithmHash,
+		Listeners: config.Listeners{
+			{
+				Protocol: config.TCP,
+				Port:     80,
+			},
+		},
+	}
+
+	for ip := range backends {
+		conf.Listeners[0].Backends = append(conf.Listeners[0].Backends, config.Backend{
+			Addr: netip.AddrPortFrom(ip, 80),
+		})
+	}
+
+	var (
+		backendIP              = slices.Collect(maps.Keys(backends))[0]
+		backendPort     uint16 = 8080
+		originalSrcPort uint16 = 32123
+	)
+
+	var scenarios = []struct {
+		name                 string
+		srcInfo              packetInfo
+		dstInfo              packetInfo
+		expectedRet          uint32
+		additionalSetup      func(t *testing.T, m *Manager)
+		additionalAssertions func(t *testing.T, retPacket gopacket.Packet)
+	}{
+		{
+			name:        "backend response to loadbalancer with ct present",
+			expectedRet: XDP_PASS,
+			srcInfo: packetInfo{
+				ip:   backendIP,
+				port: backendPort,
+			},
+			dstInfo: packetInfo{
+				ip:   lbIP,
+				mac:  lbMac,
+				port: originalSrcPort,
+			},
+			additionalSetup: func(t *testing.T, m *Manager) {
+				// setup a conntrack entry in our map to simulate the loadbalancer already forwarded the packet
+				conntrackEntry := lbConntrackEntry{
+					SrcIp:   lbInAddrFromNetipAddr(clientIP),
+					DstIp:   lbInAddrFromNetipAddr(lbIP),
+					SrcPort: originalSrcPort,
+					DstPort: 80,
+				}
+				fiveTuple := lbFiveTupleT{
+					SrcIp:    lbInAddrFromNetipAddr(backendIP),
+					DstIp:    lbInAddrFromNetipAddr(lbIP),
+					SrcPort:  8080,
+					DstPort:  originalSrcPort,
+					Protocol: conf.Listeners[0].Protocol.Unix(),
+				}
+				assert.NoError(t, m.objs.Conntrack.Put(fiveTuple, conntrackEntry), "conntrack entry ebpf map")
+			},
+			additionalAssertions: func(t *testing.T, retPacket gopacket.Packet) {
+				_ = retPacket.LinkLayer().(*layers.Ethernet)
+				ipv4 := retPacket.NetworkLayer().(*layers.IPv4)
+				tcp := retPacket.TransportLayer().(*layers.TCP)
+				// TODO: assert client MAC once we have a neigh for that
+				// assert.Equal(t, lbMac, eth.SrcMAC, "src MAC is not from LB link")
+				assert.Equal(t, lbIP.String(), ipv4.SrcIP.String(), "src IP is not LB")
+				assert.Equal(t, clientIP.String(), ipv4.DstIP.String(), "dst IP is not client")
+				assert.EqualValues(t, 80, tcp.SrcPort)
+				assert.EqualValues(t, originalSrcPort, tcp.DstPort)
+
+			},
+		},
+	}
+	for _, tt := range scenarios {
+		t.Run(tt.name, func(t *testing.T) {
+			inPacket, err := ipv4Packet(tt.srcInfo, tt.dstInfo)
+			if err != nil {
+				t.Fatalf("building ipv4 packet: %s", err)
+			}
+
+			t.Cleanup(func() {
+				traces, err := io.ReadAll(kernelTraceReader)
+				if err != nil {
+					t.Logf("WARNING: failed to read kernel traces: %s", err)
+				} else {
+					t.Logf("ebpf program traces:\n%s", traces)
+				}
+				if err := kernelTraceReader.Clear(); err != nil {
+					t.Logf("WARNING: unable to clear kernel traces: %s", err)
+				}
+			})
+
+			var (
+				retPacket gopacket.Packet
+				ret       uint32
+			)
+			// CAP_SYS_ADMIN is required for using xdp_ct_lookup kfunc as it is from a kernel module.
+			testutil.WithCapabilities(t, []testutil.Capability{testutil.CAP_SYS_ADMIN}, func() {
+				m, err := New(&conf, lbIP)
+				if err != nil {
+					t.Fatalf("setup ebpf manager: %s", err)
+				}
+				t.Cleanup(func() {
+					m.Close()
+				})
+
+				if tt.additionalSetup != nil {
+					tt.additionalSetup(t, m)
+				}
 
 				ret, retPacket, err = testEbpf(m.objs.LoadBalance, inPacket.packet.Data(), uint32(lbLink.Attrs().Index))
 				if err != nil {
