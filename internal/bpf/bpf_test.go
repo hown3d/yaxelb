@@ -66,7 +66,7 @@ func TestManager_Loadbalance(t *testing.T) {
 
 	for ip := range backends {
 		conf.Listeners[0].Backends = append(conf.Listeners[0].Backends, config.Backend{
-			Addr: netip.AddrPortFrom(ip, 8080),
+			Addr: netip.AddrPortFrom(ip, 80),
 		})
 	}
 
@@ -80,7 +80,7 @@ func TestManager_Loadbalance(t *testing.T) {
 		port: 80,
 	}
 
-	in, err := ipv4Packet(srcInfo, dstInfo)
+	inPacket, err := ipv4Packet(srcInfo, dstInfo)
 	if err != nil {
 		t.Fatalf("building ipv4 packet: %s", err)
 	}
@@ -128,8 +128,8 @@ func TestManager_Loadbalance(t *testing.T) {
 	})
 
 	var (
-		packet gopacket.Packet
-		ret    uint32
+		retPacket gopacket.Packet
+		ret       uint32
 	)
 	// CAP_SYS_ADMIN is required for using xdp_ct_lookup kfunc as it is from a kernel module.
 	testutil.WithCapabilities(t, []testutil.Capability{testutil.CAP_SYS_ADMIN}, func() {
@@ -141,21 +141,30 @@ func TestManager_Loadbalance(t *testing.T) {
 			m.Close()
 		})
 
-		ret, packet, err = testEbpf(m.objs.LoadBalance, in, uint32(lbLink.Attrs().Index))
+		ret, retPacket, err = testEbpf(m.objs.LoadBalance, inPacket.packet.Data(), uint32(lbLink.Attrs().Index))
 		if err != nil {
 			t.Fatalf("testing ebpf program: %s", err)
 		}
 	})
 
 	assert.Equal(t, XDP_REDIRECT, ret, "xdp return code")
-	eth := packet.LinkLayer().(*layers.Ethernet)
-	ipv4 := packet.NetworkLayer().(*layers.IPv4)
+	eth := retPacket.LinkLayer().(*layers.Ethernet)
+	ipv4 := retPacket.NetworkLayer().(*layers.IPv4)
 	assert.Equal(t, lbMac, eth.SrcMAC, "src MAC is not from LB link")
 	assert.Equal(t, lbIP.String(), ipv4.SrcIP.String(), "src IP is not LB")
 
 	mac, ok := backends[netip.MustParseAddr(ipv4.DstIP.String())]
 	assert.True(t, ok, "dst IP is a backend")
 	assert.Equal(t, mac, eth.DstMAC)
+
+	err, mismatchs := retPacket.VerifyChecksums()
+	assert.NoError(t, err, "checksum verification")
+	if !assert.Len(t, mismatchs, 0, "checksum mismatchs") {
+		for _, m := range mismatchs {
+			t.Logf("checksum verification failed on layer %s, correct csum is %04x, got %04x", m.Layer.LayerType(), m.Correct, m.Actual)
+		}
+	}
+
 }
 
 type packetInfo struct {
@@ -164,7 +173,11 @@ type packetInfo struct {
 	port uint16
 }
 
-func ipv4Packet(src, dst packetInfo) ([]byte, error) {
+type packet struct {
+	packet gopacket.Packet
+}
+
+func ipv4Packet(src, dst packetInfo) (packet, error) {
 	if src.mac == nil {
 		mac, _ := testutil.GenerateRandMAC()
 		src.mac = mac
@@ -187,13 +200,20 @@ func ipv4Packet(src, dst packetInfo) ([]byte, error) {
 		DstPort: layers.TCPPort(dst.port),
 	}
 	opts := gopacket.SerializeOptions{
-		FixLengths: true,
+		FixLengths:       true,
+		ComputeChecksums: true,
+	}
+	if err := tcp.SetNetworkLayerForChecksum(ipv4); err != nil {
+		return packet{}, err
 	}
 	buf := gopacket.NewSerializeBuffer()
 	if err := gopacket.SerializeLayers(buf, opts, eth, ipv4, tcp); err != nil {
-		return nil, err
+		return packet{}, err
 	}
-	return buf.Bytes(), nil
+	return packet{
+		packet: testutil.DecodePacket(buf.Bytes()),
+	}, nil
+
 }
 
 func testEbpf(prog *ebpf.Program, in []byte, ifindex uint32) (uint32, gopacket.Packet, error) {
