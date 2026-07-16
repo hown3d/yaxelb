@@ -242,9 +242,9 @@ int load_balance(struct xdp_md *ctx) {
                        "not found in listener_map",
                        &in.dst_ip, bpf_ntohs(in.dst_port), in.protocol);
 #endif
-            action = XDP_PASS;
+            action = XDP_DROP;
           } else {
-            action = XDP_ABORTED;
+            action = XDP_PASS;
           }
         }
 
