@@ -1,0 +1,46 @@
+name: Verify
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Compiler image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          tags: "compile"
+          file: Dockerfile.bpf
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+
+      - name: generate
+        run: make generate-ebpf-in-docker
+
+      - name: Verify no changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "❌ ERROR: The command modified files or generated untracked files!"
+            echo "Please run the command locally, commit the changes, and push again."
+            echo "----------------------------------------"
+            git status
+            echo "----------------------------------------"
+            git diff
+            exit 1
+          else
+            echo "✅ SUCCESS: No files were changed!"
+          fi

@@ -11,9 +11,9 @@ else
 generate-go: generate-ebpf-in-docker
 endif
 
-generate-ebpf-in-docker:
-	docker build -t compile --target compile -f Dockerfile.bpf .
-	docker run -ti -v $(shell pwd):/work -w /work compile go generate ./...
+generate-ebpf-in-docker: 
+	./hack/compile-image.sh
+	docker run -v $(shell pwd):/work -w /work compile go generate ./...
 
 generate-ebpf:
 	go generate ./...
