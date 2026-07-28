@@ -44,11 +44,11 @@ func TestYaxeLB(t *testing.T) {
 		},
 		{
 			name: "netcat",
-			cmd:  []string{"nc", "-vz", "10.0.0.2", "8080"},
+			cmd:  []string{"nc", "-vz", "-w", "1", "10.0.0.2", "8080"},
 		},
 		{
 			name:    "netcat on port not bound by listener",
-			cmd:     []string{"nc", "-vz", "10.0.0.2", "4200"},
+			cmd:     []string{"nc", "-vz", "-w", "1", "10.0.0.2", "4200"},
 			wantErr: true,
 		},
 	}
