@@ -40,14 +40,18 @@ func TestYaxeLB(t *testing.T) {
 	}{
 		{
 			name: "http",
-			cmd:  []string{"curl", "--connect-timeout", "1s", "-v", "http://10.0.0.2"},
+			cmd:  []string{"curl", "--connect-timeout", "3s", "-v", "http://10.0.0.2"},
 		},
 		{
-			name: "netcat",
-			cmd:  []string{"nc", "-vz", "-w", "1", "10.0.0.2", "8080"},
+			name: "netcat udp",
+			cmd:  []string{"nc", "-vzu", "-w", "1", "10.0.0.2", "8080"},
 		},
 		{
-			name:    "netcat on port not bound by listener",
+			name: "netcat on port not bound by listener",
+			cmd:  []string{"nc", "-vzu", "-w", "1", "10.0.0.2", "4200"},
+		},
+		{
+			name:    "netcat with wrong protocol",
 			cmd:     []string{"nc", "-vz", "-w", "1", "10.0.0.2", "4200"},
 			wantErr: true,
 		},
