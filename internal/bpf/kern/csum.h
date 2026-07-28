@@ -9,15 +9,16 @@ static __always_inline __u16 csum_fold(__u32 csum) {
   return (__u16)~csum;
 }
 
-static __always_inline __sum16 tcp_csum(struct tcphdr *tcph, struct iphdr *iph,
-                                        __be32 old_saddr, __be32 old_daddr,
-                                        __be16 old_sport, __be16 old_dport) {
+static __always_inline __sum16 l4_csum(__sum16 check, struct iphdr *iph,
+                                       __be32 old_saddr, __be32 old_daddr,
+                                       __be16 old_sport, __be16 old_dport,
+                                       __be16 new_sport, __be16 new_dport) {
 
-  __u32 tcp_seed = (~tcph->check) & 0xFFFF;
-  s64 tcp_diff = bpf_csum_diff(&old_saddr, 4, &iph->saddr, 4, tcp_seed);
-  tcp_diff = bpf_csum_diff(&old_daddr, 4, &iph->daddr, 4, tcp_diff);
+  __u32 seed = (~check) & 0xFFFF;
+  s64 diff = bpf_csum_diff(&old_saddr, 4, &iph->saddr, 4, seed);
+  diff = bpf_csum_diff(&old_daddr, 4, &iph->daddr, 4, diff);
 
-  if (old_sport != tcph->source || old_dport != tcph->dest) {
+  if (old_sport != new_sport || old_dport != new_dport) {
 
     // Group two 2-byte ports into exactly 4 bytes to satisfy bpf_csum_diff size
     // requirements
@@ -29,14 +30,14 @@ static __always_inline __sum16 tcp_csum(struct tcphdr *tcph, struct iphdr *iph,
     struct {
       __be16 sport;
       __be16 dport;
-    } new_ports = {tcph->source, tcph->dest};
+    } new_ports = {new_sport, new_dport};
 
     // Calculate diff on the grouped 4-byte variables safely
-    tcp_diff = bpf_csum_diff((__be32 *)&old_ports, 4, (__be32 *)&new_ports, 4,
-                             tcp_diff);
+    diff =
+        bpf_csum_diff((__be32 *)&old_ports, 4, (__be32 *)&new_ports, 4, diff);
   }
 
-  return csum_fold(tcp_diff);
+  return csum_fold(diff);
 }
 
 static __always_inline __u16 iph_csum(struct iphdr *iph) {
