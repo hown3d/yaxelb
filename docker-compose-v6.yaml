@@ -1,0 +1,80 @@
+services:
+  target1:
+    image: traefik/whoami
+    networks:
+      lb6:
+        ipv6_address: fd00:db81:1::10
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+    command:
+      - --verbose
+  target2:
+    image: traefik/whoami
+    networks:
+      lb6:
+        ipv6_address: fd00:db81:1::11
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+    command:
+      - --verbose
+  target3:
+    image: traefik/whoami
+    networks:
+      lb6:
+        ipv6_address: fd00:db81:1::12
+    environment:
+        WHOAMI_PORT_NUMBER: 8080
+    command:
+      - --verbose
+
+
+  client:
+    image: nicolaka/netshoot
+    command:
+      - sleep 
+      - "36000"
+    init: true
+    cap_add:
+      - NET_ADMIN
+    networks:
+      lb6:
+        ipv6_address: fd00:db81:1::42
+
+  lb:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: nicolaka/netshoot
+    volumes:
+      - ./examples/config-v6.yaml:/loadbalancer/config.yaml
+      - /tmp:/tmp/yaxelb
+      - /sys/fs/bpf:/sys/fs/bpf
+    command:
+      - -log-level=debug
+      - -enable-healthcheck=true
+      # use generic xdp mode, because veth pairs do not natively support XDP_REDIRECT
+      # To do so, one must enable gro and disable tx-checksumming via ethtool
+      # - -xdp-mode=generic
+      - -xdp-mode=driver
+    privileged: true
+    networks:
+      lb6:
+        driver_opts:
+          # must use IFNAME 
+          # forwarding 
+          com.docker.network.endpoint.sysctls: net.ipv6.conf.IFNAME.forwarding=1
+        ipv6_address: fd00:db81:1::2
+
+    
+networks:
+  lb6:
+    driver: bridge
+    enable_ipv6: true
+    enable_ipv4: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv6: routed
+    ipam:
+     config:
+      - subnet: fd00:db81:1::/96
+
+
