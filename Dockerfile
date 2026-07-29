@@ -11,7 +11,14 @@ RUN --mount=type=cache,dst=/root/.cache/go-build \
   --mount=type=cache,dst=/go/pkg/mod \
   CGO_ENABLED=0 GOARCH=${TARGETARCH} GOOS=linux go build -o lb ./cmd
 
+# cli
+RUN --mount=type=cache,dst=/root/.cache/go-build \
+  --mount=type=cache,dst=/go/pkg/mod \
+  CGO_ENABLED=0 GOARCH=${TARGETARCH} GOOS=linux go build -o yaxelb-dbg ./cmd/yaxelb-dbg/
+
+
 FROM base
 COPY --from=builder /work/lb /lb
+COPY --from=builder /work/yaxelb-dbg /bin/yaxelb-dbg
 USER root:root
 ENTRYPOINT [ "/lb" ]
