@@ -43,7 +43,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - kernel: '5.15'
           - kernel: '6.1'
           - kernel: '6.6'
           - kernel: '6.12'
