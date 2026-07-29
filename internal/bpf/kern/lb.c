@@ -304,6 +304,7 @@ int load_balance(struct xdp_md *ctx) {
         .dst_port = *dst_port,
     };
 
+#if DEBUG >= DEBUG_HIGH
     bpf_printk(
         "storing conntrack key: in_loadbalancer={ .src_ip: %pI4, .dst_ip = "
         "%pI4, .src_port: %d, .dst_port: %d, .protocol: %d }",
@@ -315,6 +316,7 @@ int load_balance(struct xdp_md *ctx) {
                "%pI4, .src_port: %d, .dst_port: %d }",
                &new_conn.src_ip, &new_conn.dst_ip, bpf_ntohs(new_conn.src_port),
                bpf_ntohs(new_conn.dst_port));
+#endif
 
     if (bpf_map_update_elem(&conntrack, &in_loadbalancer, &new_conn, BPF_ANY) <
         0) {
