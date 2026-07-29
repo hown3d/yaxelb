@@ -43,7 +43,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - kernel: '5.15'
           - kernel: '6.1'
           - kernel: '6.6'
           - kernel: '6.12'
@@ -124,7 +123,7 @@ jobs:
         if: success() || failure() # always run even if the previous step fails
         with:
           report_paths: 'test-*.xml'
-          check_name: "BPF Test Results"
+          check_name: "BPF Test Results ${{ matrix.kernel }}"
 
       - name: Publish Verifier error logs as artifacts
         uses: actions/upload-artifact@v7

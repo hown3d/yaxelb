@@ -84,3 +84,20 @@ static __always_inline int parse_tcphdr(struct hdr_cursor *cursor,
 
   return len;
 }
+
+static __always_inline int parse_udphdr(struct hdr_cursor *cursor,
+                                        void *data_end,
+                                        struct udphdr **udphdr) {
+  __u16 len;
+  struct udphdr *udph = cursor->pos;
+
+  if (udph + 1 > data_end)
+    return -ERR_INVALID_LEN;
+
+  len = bpf_ntohs(udph->len) - sizeof(struct udphdr);
+
+  cursor->pos = udph + 1;
+  *udphdr = udph;
+
+  return len;
+}

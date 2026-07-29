@@ -131,7 +131,8 @@ int load_balance(struct xdp_md *ctx) {
   int eth_type, ip_type;
   struct ethhdr *eth;
   struct iphdr *iph;
-  struct tcphdr *tcph;
+  __be16 *src_port, *dst_port;
+  __sum16 *check;
   struct backend *backend;
 
   /* Default action XDP_PASS, imply everything we couldn't parse, or that
@@ -153,7 +154,7 @@ int load_balance(struct xdp_md *ctx) {
   }
   if (eth_type != bpf_htons(ETH_P_IP)) {
 #if DEBUG >= DEBUG_HIGH
-    bpf_printk("ip proto is not tcp, got %d", ip_type);
+    bpf_printk("ip proto is not ipv4, got %d", bpf_htons(eth_type));
 #endif
     goto out;
   }
@@ -161,38 +162,61 @@ int load_balance(struct xdp_md *ctx) {
   ip_type = parse_iphdr(&cursor, data_end, &iph);
   if (ip_type < 0) {
 #if DEBUG >= DEBUG_HIGH
-    bpf_printk("ip proto is not tcp, got %d", ip_type);
+    bpf_printk("failed to parse ip header");
 #endif
     goto out;
   }
 
-  if (ip_type != IPPROTO_TCP) {
+  switch (ip_type) {
+  case IPPROTO_TCP: {
+    struct tcphdr *tcph;
+    int ret = parse_tcphdr(&cursor, data_end, &tcph);
+    if (ret < 0) {
 #if DEBUG >= DEBUG_HIGH
-    bpf_printk("ip proto is not tcp, got %d", ip_type);
+      bpf_printk("bad tcp header %d", ret);
+#endif
+      action = XDP_ABORTED;
+      goto out;
+    }
+    check = &tcph->check;
+    src_port = &tcph->source;
+    dst_port = &tcph->dest;
+    break;
+  }
+  case IPPROTO_UDP: {
+    struct udphdr *udph;
+    int ret = parse_udphdr(&cursor, data_end, &udph);
+    if (ret < 0) {
+#if DEBUG >= DEBUG_HIGH
+      bpf_printk("bad udp header %d", ret);
+#endif
+      action = XDP_ABORTED;
+      goto out;
+    }
+    check = &udph->check;
+    src_port = &udph->source;
+    dst_port = &udph->dest;
+    break;
+  }
+
+  default: {
+#if DEBUG >= DEBUG_HIGH
+    bpf_printk("ip proto is neither udp or tcp, got %d", ip_type);
 #endif
     goto out;
   }
-
-  int ret = parse_tcphdr(&cursor, data_end, &tcph);
-  if (ret < 0) {
-#if DEBUG >= DEBUG_HIGH
-    bpf_printk("bad tcp header %d", ret);
-#endif
-    action = XDP_ABORTED;
-    goto out;
   }
-  __u16 tcp_len = (__u16)ret;
 
 #if DEBUG >= DEBUG_HIGH
-  bpf_printk("got tcp packet: src %pI4:%d dst %pI4:%d", &iph->saddr,
-             bpf_ntohs(tcph->source), &iph->daddr, bpf_ntohs(tcph->dest));
+  bpf_printk("got l4 packet: src %pI4:%d dst %pI4:%d", &iph->saddr,
+             bpf_ntohs(*src_port), &iph->daddr, bpf_ntohs(*dst_port));
 #endif
 
   struct five_tuple_t in = {
       .src_ip = iph->saddr,
       .dst_ip = iph->daddr,
-      .dst_port = tcph->dest,
-      .src_port = tcph->source,
+      .dst_port = *dst_port,
+      .src_port = *src_port,
       .protocol = ip_type,
   };
   bpf_printk("checking conntrack for key: in={ .src_ip: %pI4, .dst_ip = "
@@ -210,23 +234,23 @@ int load_balance(struct xdp_md *ctx) {
 
     __be32 old_saddr = iph->saddr;
     __be32 old_daddr = iph->daddr;
-    __be32 old_sport = tcph->source;
-    __be32 old_dport = tcph->dest;
+    __be32 old_sport = *src_port;
+    __be32 old_dport = *dst_port;
 
     iph->saddr = conn->dst_ip.s_addr; // original dst ip (load balancer)
     iph->daddr = conn->src_ip.s_addr; // original source ip (client)
     // recalc checksum
     iph->check = iph_csum(iph);
 
-    tcph->source =
+    *src_port =
         conn->dst_port; // original dst port (load balancer listener port)
-    tcph->dest = conn->src_port; // original src port (client src port)
+    *dst_port = conn->src_port; // original src port (client src port)
 
     // calculate tcp checksum
-    tcph->check =
-        tcp_csum(tcph, iph, old_saddr, old_daddr, old_sport, old_dport);
+    *check = l4_csum(*check, iph, old_saddr, old_daddr, old_sport, old_dport,
+                     *src_port, *dst_port);
 
-    bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(tcph->check));
+    bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(*check));
   } else {
     int ret = select_backend(&in, &backend);
     if (ret < 0) {
@@ -234,7 +258,7 @@ int load_balance(struct xdp_md *ctx) {
         // To ensure we don't drop returning packets from connections the LB
         // created, we will just let the kernel handle such packets.
         int conntrack_ret = lookup_kernel_conntrack(
-            ctx, iph->saddr, tcph->source, iph->daddr, tcph->dest, ip_type);
+            ctx, iph->saddr, *src_port, iph->daddr, *dst_port, ip_type);
         if (conntrack_ret < 0) {
           action = XDP_DROP;
           if (conntrack_ret == -CONNTRACK_NOT_FOUND) {
@@ -270,16 +294,17 @@ int load_balance(struct xdp_md *ctx) {
         .src_ip = backend->ip, // Backend IP
         .dst_ip = iph->daddr,  //  LB IP
         .src_port = backend->port,
-        .dst_port = tcph->source,
+        .dst_port = *src_port,
         .protocol = ip_type,
     };
     struct conntrack_entry new_conn = {
         .src_ip.s_addr = iph->saddr,
         .dst_ip.s_addr = iph->daddr,
-        .src_port = tcph->source,
-        .dst_port = tcph->dest,
+        .src_port = *src_port,
+        .dst_port = *dst_port,
     };
 
+#if DEBUG >= DEBUG_HIGH
     bpf_printk(
         "storing conntrack key: in_loadbalancer={ .src_ip: %pI4, .dst_ip = "
         "%pI4, .src_port: %d, .dst_port: %d, .protocol: %d }",
@@ -291,6 +316,7 @@ int load_balance(struct xdp_md *ctx) {
                "%pI4, .src_port: %d, .dst_port: %d }",
                &new_conn.src_ip, &new_conn.dst_ip, bpf_ntohs(new_conn.src_port),
                bpf_ntohs(new_conn.dst_port));
+#endif
 
     if (bpf_map_update_elem(&conntrack, &in_loadbalancer, &new_conn, BPF_ANY) <
         0) {
@@ -301,20 +327,20 @@ int load_balance(struct xdp_md *ctx) {
 
     __be32 old_saddr = iph->saddr;
     __be32 old_daddr = iph->daddr;
-    __be32 old_sport = tcph->source;
-    __be32 old_dport = tcph->dest;
+    __be32 old_sport = *src_port;
+    __be32 old_dport = *dst_port;
 
     iph->saddr = iph->daddr;
     iph->daddr = backend->ip.s_addr;
     // recalc checksum
     iph->check = iph_csum(iph);
 
-    tcph->dest = backend->port;
+    *dst_port = backend->port;
 
     // calculate tcp checksum
-    tcph->check =
-        tcp_csum(tcph, iph, old_saddr, old_daddr, old_sport, old_dport);
-    bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(tcph->check));
+    *check = l4_csum(*check, iph, old_saddr, old_daddr, old_sport, old_dport,
+                     *src_port, *dst_port);
+    bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(*check));
   }
 
 #if DEBUG >= DEBUG_MEDIUM

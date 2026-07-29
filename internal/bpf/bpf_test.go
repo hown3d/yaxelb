@@ -86,18 +86,29 @@ func runTest(m *testing.M) int {
 }
 
 func TestLoadbalancer_Client(t *testing.T) {
+	var (
+		udpPort uint16 = 8080
+		tcpPort uint16 = 80
+	)
 	conf := config.Config{
 		Algorithm: config.AlgorithmHash,
 		Listeners: config.Listeners{
 			{
 				Protocol: config.TCP,
-				Port:     80,
+				Port:     tcpPort,
+			},
+			{
+				Protocol: config.UDP,
+				Port:     udpPort,
 			},
 		},
 	}
 
 	for ip := range backends {
 		conf.Listeners[0].Backends = append(conf.Listeners[0].Backends, config.Backend{
+			Addr: netip.AddrPortFrom(ip, 80),
+		})
+		conf.Listeners[1].Backends = append(conf.Listeners[0].Backends, config.Backend{
 			Addr: netip.AddrPortFrom(ip, 80),
 		})
 	}
@@ -120,6 +131,7 @@ func TestLoadbalancer_Client(t *testing.T) {
 		name                 string
 		srcInfo              packetInfo
 		dstInfo              packetInfo
+		proto                config.Protocol
 		expectedRet          uint32
 		additionalAssertions func(t *testing.T, retPacket gopacket.Packet)
 	}{
@@ -133,8 +145,33 @@ func TestLoadbalancer_Client(t *testing.T) {
 			dstInfo: packetInfo{
 				ip:   lbIP,
 				mac:  lbMac,
-				port: 80,
+				port: tcpPort,
 			},
+			proto: config.TCP,
+			additionalAssertions: func(t *testing.T, retPacket gopacket.Packet) {
+				eth := retPacket.LinkLayer().(*layers.Ethernet)
+				ipv4 := retPacket.NetworkLayer().(*layers.IPv4)
+				assert.Equal(t, lbMac, eth.SrcMAC, "src MAC is not from LB link")
+				assert.Equal(t, lbIP.String(), ipv4.SrcIP.String(), "src IP is not LB")
+
+				mac, ok := backends[netip.MustParseAddr(ipv4.DstIP.String())]
+				assert.True(t, ok, "dst IP is a backend")
+				assert.Equal(t, mac, eth.DstMAC)
+			},
+		},
+		{
+			name:        "client to loadbalancer udp",
+			expectedRet: XDP_REDIRECT,
+			srcInfo: packetInfo{
+				ip:   clientIP,
+				port: 32112,
+			},
+			dstInfo: packetInfo{
+				ip:   lbIP,
+				mac:  lbMac,
+				port: udpPort,
+			},
+			proto: config.UDP,
 			additionalAssertions: func(t *testing.T, retPacket gopacket.Packet) {
 				eth := retPacket.LinkLayer().(*layers.Ethernet)
 				ipv4 := retPacket.NetworkLayer().(*layers.IPv4)
@@ -158,11 +195,12 @@ func TestLoadbalancer_Client(t *testing.T) {
 				mac:  lbMac,
 				port: 12345,
 			},
+			proto: config.TCP,
 		},
 	}
 	for _, tt := range scenarios {
 		t.Run(tt.name, func(t *testing.T) {
-			inPacket, err := ipv4Packet(tt.srcInfo, tt.dstInfo)
+			inPacket, err := ipv4Packet(tt.srcInfo, tt.dstInfo, tt.proto)
 			if err != nil {
 				t.Fatalf("building ipv4 packet: %s", err)
 			}
@@ -235,6 +273,7 @@ func TestLoadbalancer_BackendReturn(t *testing.T) {
 		name                 string
 		srcInfo              packetInfo
 		dstInfo              packetInfo
+		proto                config.Protocol
 		expectedRet          uint32
 		additionalSetup      func(t *testing.T, m *Manager)
 		additionalAssertions func(t *testing.T, retPacket gopacket.Packet)
@@ -251,6 +290,7 @@ func TestLoadbalancer_BackendReturn(t *testing.T) {
 				mac:  lbMac,
 				port: originalSrcPort,
 			},
+			proto: config.TCP,
 			additionalSetup: func(t *testing.T, m *Manager) {
 				// setup a conntrack entry in our map to simulate the loadbalancer already forwarded the packet
 				conntrackEntry := lbConntrackEntry{
@@ -284,7 +324,7 @@ func TestLoadbalancer_BackendReturn(t *testing.T) {
 	}
 	for _, tt := range scenarios {
 		t.Run(tt.name, func(t *testing.T) {
-			inPacket, err := ipv4Packet(tt.srcInfo, tt.dstInfo)
+			inPacket, err := ipv4Packet(tt.srcInfo, tt.dstInfo, tt.proto)
 			if err != nil {
 				t.Fatalf("building ipv4 packet: %s", err)
 			}
@@ -356,7 +396,12 @@ func assertChecksum(t *testing.T, packet gopacket.Packet) {
 
 }
 
-func ipv4Packet(src, dst packetInfo) (packet, error) {
+type checksummableLayer interface {
+	gopacket.SerializableLayer
+	SetNetworkLayerForChecksum(gopacket.NetworkLayer) error
+}
+
+func ipv4Packet(src, dst packetInfo, proto config.Protocol) (packet, error) {
 	if src.mac == nil {
 		mac, _ := testutil.GenerateRandMAC()
 		src.mac = mac
@@ -367,26 +412,38 @@ func ipv4Packet(src, dst packetInfo) (packet, error) {
 		EthernetType: layers.EthernetTypeIPv4,
 	}
 	ipv4 := &layers.IPv4{
-		SrcIP:    src.ip.AsSlice(),
-		DstIP:    dst.ip.AsSlice(),
-		Protocol: layers.IPProtocolTCP,
-		Version:  4,
+		SrcIP:   src.ip.AsSlice(),
+		DstIP:   dst.ip.AsSlice(),
+		Version: 4,
 		// Don't fragment
 		FragOffset: syscall.IP_DF,
 	}
-	tcp := &layers.TCP{
-		SrcPort: layers.TCPPort(src.port),
-		DstPort: layers.TCPPort(dst.port),
+	var l4 checksummableLayer
+	switch proto {
+	case config.TCP:
+		l4 = &layers.TCP{
+			SrcPort: layers.TCPPort(src.port),
+			DstPort: layers.TCPPort(dst.port),
+		}
+		ipv4.Protocol = layers.IPProtocolTCP
+	case config.UDP:
+		l4 = &layers.UDP{
+			SrcPort: layers.UDPPort(src.port),
+			DstPort: layers.UDPPort(dst.port),
+		}
+		ipv4.Protocol = layers.IPProtocolUDP
+	default:
+		return packet{}, fmt.Errorf("unknown proto %s", proto)
 	}
 	opts := gopacket.SerializeOptions{
 		FixLengths:       true,
 		ComputeChecksums: true,
 	}
-	if err := tcp.SetNetworkLayerForChecksum(ipv4); err != nil {
+	if err := l4.SetNetworkLayerForChecksum(ipv4); err != nil {
 		return packet{}, err
 	}
 	buf := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(buf, opts, eth, ipv4, tcp); err != nil {
+	if err := gopacket.SerializeLayers(buf, opts, eth, ipv4, l4); err != nil {
 		return packet{}, err
 	}
 	return packet{
