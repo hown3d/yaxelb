@@ -124,7 +124,7 @@ jobs:
         if: success() || failure() # always run even if the previous step fails
         with:
           report_paths: 'test-*.xml'
-          check_name: "BPF Test Results"
+          check_name: "BPF Test Results ${{ matrix.kernel }}"
 
       - name: Publish Verifier error logs as artifacts
         uses: actions/upload-artifact@v7
