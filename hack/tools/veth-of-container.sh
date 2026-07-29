@@ -6,7 +6,7 @@ CONTAINER=$1
 set -eo pipefail
 
 run_in_container() {
-  docker run --network=host --privileged alpine "$@"
+  docker run --rm --network=host --privileged alpine "$@"
 }
 
 iflink=$(docker exec $CONTAINER cat /sys/class/net/$LINK/iflink)

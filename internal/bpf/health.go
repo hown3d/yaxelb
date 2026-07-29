@@ -14,34 +14,89 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-func (m *Manager) newBackendHealthUpdater(listener config.Listener, addr netip.Addr, healthManager *healthcheck.Manager) (*backendHealthUpdater, error) {
-	listenerKey := (lbListenerEntry{}).FromConfig(listener, addr)
-	var backendMap *ebpf.Map
-	if err := m.objs.ListenerMap.Lookup(listenerKey, &backendMap); err != nil {
-		return nil, err
-	}
-	log := m.log.
+type BackendHealthProber interface {
+	Probe(ctx context.Context)
+	Close() error
+}
+
+func (p *Manager) newBackendHealthUpdater(listener config.Listener, addr netip.Addr, healthManager *healthcheck.Manager) (BackendHealthProber, error) {
+	var (
+		backendMap *ebpf.Map
+	)
+	log := p.log.
 		WithGroup("healthcheck").
 		With("listener", fmt.Sprintf("%s://%s:%d", listener.Protocol.GoNetwork(), addr, listener.Port))
-	log.Debug("retrieved backend map", "map", backendMap.String())
-	return &backendHealthUpdater{
-		healthManager: healthManager,
-		backendMap:    backendMap,
-		updateNumBackendFunc: func(num int) error {
-			return m.objs.NumBackends.Put(listenerKey, uint16(num))
-		},
-		log: log,
-	}, nil
+
+	switch addr.BitLen() {
+	case 32:
+		listenerKey := v4ListenerKey(listener, addr)
+		if err := p.objs.ListenerMap.Lookup(listenerKey, &backendMap); err != nil {
+			return nil, err
+		}
+		log.Debug("retrieved backend map", "map", backendMap.String())
+		return &backendHealthProber[lbBackend]{
+			healthManager: healthManager,
+			backendMap:    backendMap,
+			updateNumBackendFunc: func(num int) error {
+				return p.objs.NumBackends.Put(listenerKey, uint16(num))
+			},
+			log: log,
+			backendFromResultFunc: func(res *healthcheck.Result) lbBackend {
+				// since we are loading the backend from the kernel, we must store port here in network order
+				return lbBackend{
+					Port: byteorder.HostToNetwork16(res.Target.Addr.Port()),
+					Ip:   lbInAddrFromNetipAddr(res.Target.Addr.Addr()),
+				}
+			},
+		}, nil
+	case 128:
+		listenerKey := v6ListenerKey(listener, addr)
+		if err := p.objs.V6ListenerMap.Lookup(listenerKey, &backendMap); err != nil {
+			return nil, err
+		}
+		log.Debug("retrieved backend map", "map", backendMap.String())
+		return &backendHealthProber[lbV6Backend]{
+			healthManager: healthManager,
+			backendMap:    backendMap,
+			updateNumBackendFunc: func(num int) error {
+				return p.objs.V6NumBackends.Put(listenerKey, uint16(num))
+			},
+			log: log,
+			backendFromResultFunc: func(res *healthcheck.Result) lbV6Backend {
+				b := lbV6Backend{
+					Port: byteorder.HostToNetwork16(res.Target.Addr.Port()),
+				}
+				b.Ip.Addr = res.Target.Addr.Addr().As16()
+				return b
+			},
+		}, nil
+	default:
+		return nil, fmt.Errorf("ip type is neither ipv4 nor ipv6, got len %d", addr.BitLen())
+	}
 }
 
-type backendHealthUpdater struct {
-	healthManager        *healthcheck.Manager
-	backendMap           *ebpf.Map
-	updateNumBackendFunc func(num int) error
-	log                  *slog.Logger
+type backend interface {
+	lbBackend | lbV6Backend
+	IsEmpty() bool
 }
 
-func (u *backendHealthUpdater) Run(ctx context.Context) {
+type backendHealthProber[BACKENDTYPE backend] struct {
+	healthManager         *healthcheck.Manager
+	backendMap            *ebpf.Map
+	updateNumBackendFunc  func(num int) error
+	backendFromResultFunc func(*healthcheck.Result) BACKENDTYPE
+	log                   *slog.Logger
+}
+
+func v4ListenerKey(listener config.Listener, addr netip.Addr) lbListenerEntry {
+	return (lbListenerEntry{}).FromConfig(listener, addr)
+}
+
+func v6ListenerKey(listener config.Listener, addr netip.Addr) lbV6ListenerEntry {
+	return (lbV6ListenerEntry{}).FromConfig(listener, addr)
+}
+
+func (u *backendHealthProber[BACKENDTYPE]) Probe(ctx context.Context) {
 	resultChan := u.runHealthManager(ctx)
 	for {
 		select {
@@ -50,12 +105,7 @@ func (u *backendHealthUpdater) Run(ctx context.Context) {
 			return
 		case res := <-resultChan:
 			{
-				err := u.updateBackendHealth(
-					lbBackend{
-						// since we are loading the backend from the kernel, we must store port here in network order
-						Port: byteorder.HostToNetwork16(res.Target.Addr.Port()),
-						Ip:   lbInAddrFromNetipAddr(res.Target.Addr.Addr()),
-					}, res.Healthy())
+				err := u.updateBackendHealth(u.backendFromResultFunc(res), res.Healthy())
 				if err != nil {
 					u.log.Error("updating backend health", "error", err)
 				}
@@ -64,18 +114,18 @@ func (u *backendHealthUpdater) Run(ctx context.Context) {
 	}
 }
 
-func (u *backendHealthUpdater) Close() error {
+func (u *backendHealthProber[BACKENDTYPE]) Close() error {
 	return u.healthManager.Close()
 }
 
-func (u *backendHealthUpdater) runHealthManager(ctx context.Context) <-chan *healthcheck.Result {
+func (u *backendHealthProber[BACKENDTYPE]) runHealthManager(ctx context.Context) <-chan *healthcheck.Result {
 	go func() {
 		u.healthManager.Run(ctx)
 	}()
 	return u.healthManager.ResultChan()
 }
 
-func (u *backendHealthUpdater) updateBackendHealth(b lbBackend, healthy bool) error {
+func (u *backendHealthProber[BACKENDTYPE]) updateBackendHealth(b BACKENDTYPE, healthy bool) error {
 	current, err := u.currentBackends()
 	if err != nil {
 		return fmt.Errorf("retrieving current backends: %w", err)
@@ -109,9 +159,9 @@ func (u *backendHealthUpdater) updateBackendHealth(b lbBackend, healthy bool) er
 	return nil
 }
 
-type backendMap map[lbBackend]uint32
+type backendMap[BACKENDTYPE backend] map[BACKENDTYPE]uint32
 
-func (b backendMap) String() string {
+func (b backendMap[BACKENDTYPE]) String() string {
 	sb := new(strings.Builder)
 	for backend, index := range b {
 		fmt.Fprintf(sb, "{%d: %s}", index, backend)
@@ -119,9 +169,9 @@ func (b backendMap) String() string {
 	return sb.String()
 }
 
-func (b backendMap) toKernelMap() ([]uint32, []lbBackend) {
+func (b backendMap[BACKENDTYPE]) toKernelMap() ([]uint32, []BACKENDTYPE) {
 	keys := make([]uint32, 0, len(b))
-	backends := make([]lbBackend, 0, len(b))
+	backends := make([]BACKENDTYPE, 0, len(b))
 	var index uint32
 	for backend := range b {
 		keys = append(keys, index)
@@ -131,15 +181,15 @@ func (b backendMap) toKernelMap() ([]uint32, []lbBackend) {
 	return keys, backends
 }
 
-func (u *backendHealthUpdater) currentBackends() (backendMap, error) {
-	backends := backendMap{}
+func (u *backendHealthProber[BACKENDTYPE]) currentBackends() (backendMap[BACKENDTYPE], error) {
+	backends := backendMap[BACKENDTYPE]{}
 	iter := u.backendMap.Iterate()
 	var (
 		index   uint32
-		backend lbBackend
+		backend BACKENDTYPE
 	)
 	for iter.Next(&index, &backend) {
-		if backend.Ip.S_addr == 0 {
+		if backend.IsEmpty() {
 			break
 		}
 		backends[backend] = index

@@ -1,0 +1,10 @@
+algorithm: hash
+listeners:
+# whoami
+- port: 80
+  protocol: TCP
+  backends:
+    - address: "[fd00:db81:1::10]:8080"
+    - address: "[fd00:db81:1::11]:8080"
+    - address: "[fd00:db81:1::12]:8080"
+

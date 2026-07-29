@@ -2,6 +2,7 @@ export KERNEL_VERSION = 6.12.59
 export ARCH = $(shell uname -m)
 KERNEL := $(shell uname -s)
 INCLUDE_FOLDER = "internal/bpf/kern/include"
+IPV6 := false
 
 generate: generate-go
 
@@ -69,6 +70,9 @@ generate-linux-headers:
 compile-test-e2e:
 	GOOS=linux GOARCH=$(ARCH) go test -c ./test/e2e/...
 
+ifeq ($(IPV6), true)
+compose-up: export COMPOSE_FILE = docker-compose-v6.yaml
+endif
 compose-up:
 	hack/compose.sh up
 

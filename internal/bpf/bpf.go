@@ -21,7 +21,7 @@ const pinPath = "/sys/fs/bpf/yaxelb"
 
 type Manager struct {
 	log             *slog.Logger
-	backendUpdaters []*backendHealthUpdater
+	backendUpdaters []BackendHealthProber
 	objs            *lbObjects
 	xdpLink         link.Link
 }
@@ -42,19 +42,12 @@ func New(conf *config.Config, addr netip.Addr) (*Manager, error) {
 		return nil, fmt.Errorf("setting lb algorithm: %w", err)
 	}
 
+	p := newMapPopulator(addr, objs, spec)
 	for _, l := range conf.Listeners {
-		if err := m.populateListenerMap(l, addr, func() (*ebpf.Map, error) {
-			return newBackendMap(spec.Maps[lbMapListenerMap])
-		}); err != nil {
+		if err := p.Populate(l, addr); err != nil {
 			m.Close()
-			return nil, err
+			return nil, fmt.Errorf("popluating map for listener %+v: %w", l, err)
 		}
-
-		if err := m.populateNumBackendMap(l, addr); err != nil {
-			m.Close()
-			return nil, err
-		}
-
 		if conf.HealthchecksEnabled() {
 			healthManager := healthcheck.NewManager(m.log, l.Backends, l.Protocol)
 			updater, err := m.newBackendHealthUpdater(l, addr, healthManager)
@@ -69,67 +62,128 @@ func New(conf *config.Config, addr netip.Addr) (*Manager, error) {
 	return m, nil
 }
 
-func (m *Manager) Attach(iface netlink.Link, mode config.XDPMode) error {
+func (p *Manager) Attach(iface netlink.Link, mode config.XDPMode) error {
 	// Attach count_packets to the network interface.
 	xdpLink, err := link.AttachXDP(link.XDPOptions{
-		Program:   m.objs.LoadBalance,
+		Program:   p.objs.LoadBalance,
 		Interface: iface.Attrs().Index,
 		Flags:     mode.ToBPFFlags(),
 	})
 	if err != nil {
 		return fmt.Errorf("attaching XDP: %w", err)
 	}
-	m.xdpLink = xdpLink
+	p.xdpLink = xdpLink
 	return nil
 }
 
-func (m *Manager) Run(ctx context.Context) {
+func (p *Manager) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	for _, u := range m.backendUpdaters {
+	for _, u := range p.backendUpdaters {
 		wg.Go(func() {
-			u.Run(ctx)
+			u.Probe(ctx)
 		})
 	}
 	wg.Wait()
 }
 
-func (m *Manager) Close() error {
+func (p *Manager) Close() error {
 	var err error
-	if m.xdpLink != nil {
-		err = errors.Join(err, m.xdpLink.Close())
+	if p.xdpLink != nil {
+		err = errors.Join(err, p.xdpLink.Close())
 	}
-	err = errors.Join(err, m.objs.Close())
-	for _, u := range m.backendUpdaters {
+	err = errors.Join(err, p.objs.Close())
+	for _, u := range p.backendUpdaters {
 		err = errors.Join(err, u.Close())
 	}
 	return err
 }
 
-func (m *Manager) populateListenerMap(lis config.Listener, addr netip.Addr, backendMapFunc func() (*ebpf.Map, error)) error {
-	backendMap, err := backendMapFunc()
+type mapPopulator interface {
+	Populate(config.Listener, netip.Addr) error
+}
+
+func newMapPopulator(addr netip.Addr, objs *lbObjects, spec *ebpf.CollectionSpec) mapPopulator {
+	if addr.Is4() {
+		return &genericMapPopulator[lbListenerEntry, lbBackend]{
+			backendFunc: func(b config.Backend) lbBackend {
+				return lbBackend{
+					Port: b.Addr.Port(),
+					Ip:   lbInAddrFromNetipAddr(b.Addr.Addr()),
+				}
+			},
+			listenerFunc: func(lis config.Listener, addr netip.Addr) lbListenerEntry {
+				return (lbListenerEntry{}).FromConfig(lis, addr)
+			},
+			numBackendMap: objs.NumBackends,
+			listenerMap:   objs.ListenerMap,
+			backendMapFunc: func() (*ebpf.Map, error) {
+				return newBackendMap(spec.Maps[lbMapListenerMap])
+			},
+		}
+	}
+	if addr.Is6() {
+		return &genericMapPopulator[lbV6ListenerEntry, lbV6Backend]{
+			numBackendMap: objs.V6NumBackends,
+			listenerMap:   objs.V6ListenerMap,
+			listenerFunc: func(lis config.Listener, addr netip.Addr) lbV6ListenerEntry {
+				return (lbV6ListenerEntry{}).FromConfig(lis, addr)
+			},
+			backendFunc: func(b config.Backend) lbV6Backend {
+				var backend lbV6Backend
+				backend.Ip.Addr = b.Addr.Addr().As16()
+				backend.Port = b.Addr.Port()
+				return backend
+			},
+			backendMapFunc: func() (*ebpf.Map, error) {
+				return newBackendMap(spec.Maps[lbMapV6ListenerMap])
+			},
+		}
+	}
+	panic("ip is neither ipv4 nor ipv6")
+}
+
+type genericMapPopulator[LISTENER, BACKEND any] struct {
+	numBackendMap  *ebpf.Map
+	listenerMap    *ebpf.Map
+	listenerFunc   func(lis config.Listener, addr netip.Addr) LISTENER
+	backendFunc    func(config.Backend) BACKEND
+	backendMapFunc func() (*ebpf.Map, error)
+}
+
+func (p *genericMapPopulator[LISTENER, BACKEND]) Populate(lis config.Listener, addr netip.Addr) error {
+	if err := p.populateListenerMap(lis, addr); err != nil {
+		return err
+	}
+
+	if err := p.populateNumBackendMap(lis, addr); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *genericMapPopulator[LISTENER, BACKEND]) populateListenerMap(lis config.Listener, addr netip.Addr) error {
+	backendMap, err := p.backendMapFunc()
 	if err != nil {
 		return err
 	}
 
 	for i, b := range lis.Backends {
-		if err := backendMap.Put(uint32(i), lbBackend{
-			Port: b.Addr.Port(),
-			Ip:   lbInAddrFromNetipAddr(b.Addr.Addr()),
-		}); err != nil {
+		backend := p.backendFunc(b)
+		if err := backendMap.Put(uint32(i), backend); err != nil {
 			return fmt.Errorf("put backend %+v into map: %w", b, err)
 		}
 	}
 
-	key := (lbListenerEntry{}).FromConfig(lis, addr)
-	if err := m.objs.ListenerMap.Put(key, uint32(backendMap.FD())); err != nil {
+	key := p.listenerFunc(lis, addr)
+	if err := p.listenerMap.Put(key, uint32(backendMap.FD())); err != nil {
 		return fmt.Errorf("store backend map for listener %+v: %w", lis, err)
 	}
 	return nil
 }
 
-func (m *Manager) populateNumBackendMap(lis config.Listener, addr netip.Addr) error {
-	key := (lbListenerEntry{}).FromConfig(lis, addr)
-	return m.objs.NumBackends.Put(key, uint16(len(lis.Backends)))
+func (p *genericMapPopulator[LISTENER, BACKEND]) populateNumBackendMap(lis config.Listener, addr netip.Addr) error {
+	key := p.listenerFunc(lis, addr)
+	return p.numBackendMap.Put(key, uint16(len(lis.Backends)))
 }
 
 func newBackendMap(outer *ebpf.MapSpec) (*ebpf.Map, error) {

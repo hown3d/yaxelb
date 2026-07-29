@@ -224,6 +224,10 @@ func (l lbBackend) String() string {
 	return fmt.Sprintf("%s:%d", l.Ip, byteorder.NetworkToHost16(l.Port))
 }
 
+func (l lbBackend) IsEmpty() bool {
+	return l.Ip.S_addr == 0
+}
+
 func (l lbLbAlgorithm) FromConfig(algo config.Algorithm) lbLbAlgorithm {
 	switch algo {
 	case config.AlgorithmRandom:
