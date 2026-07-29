@@ -146,6 +146,15 @@ func (p Protocol) Unix() uint8 {
 	return 0
 }
 
+func (p *Protocol) FromUnix(u uint8) Protocol {
+	switch u {
+	case unix.IPPROTO_TCP:
+		*p = TCP
+	case unix.IPPROTO_UDP:
+		*p = UDP
+	}
+	return *p
+}
 func (p Protocol) GoNetwork() string {
 	return strings.ToLower(string(p))
 }

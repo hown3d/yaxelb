@@ -47,6 +47,7 @@ struct {
   __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
   __type(key, struct listener_entry);
   __uint(max_entries, 16);
+  __uint(pinning, LIBBPF_PIN_BY_NAME);
   __array(values, struct backend_map);
 } listener_map SEC(".maps");
 
@@ -55,6 +56,7 @@ struct {
   __type(key, struct five_tuple_t);
   __type(value, struct conntrack_entry);
   __uint(max_entries, 512);
+  __uint(pinning, LIBBPF_PIN_BY_NAME);
 } conntrack SEC(".maps");
 
 struct {
@@ -62,6 +64,7 @@ struct {
   __type(key, struct listener_entry);
   __type(value, __u16);
   __uint(max_entries, 128);
+  __uint(pinning, LIBBPF_PIN_BY_NAME);
 } num_backends SEC(".maps");
 
 enum lb_algorithm {

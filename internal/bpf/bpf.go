@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"os"
 	"sync"
 
 	"yaxelb/internal/config"
@@ -16,6 +17,8 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
+const pinPath = "/sys/fs/bpf/yaxelb"
+
 type Manager struct {
 	log             *slog.Logger
 	backendUpdaters []*backendHealthUpdater
@@ -24,26 +27,12 @@ type Manager struct {
 }
 
 func New(conf *config.Config, addr netip.Addr) (*Manager, error) {
-	spec, err := loadLb()
+	objs, spec, err := LoadObjects()
 	if err != nil {
 		return nil, err
 	}
-
-	// Load the compiled eBPF ELF and load it into the kernel.
-	var objs lbObjects
-	if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{}); err != nil {
-		var verifierErr *ebpf.VerifierError
-		if errors.As(err, &verifierErr) {
-			if err := writeVerifierLog(verifierErr); err != nil {
-				slog.Default().Error("writing verifier error", "error", err)
-			}
-			// print as %+v to get the full error log
-			return nil, fmt.Errorf("verifier error from kernel: %+v", verifierErr)
-		}
-		return nil, fmt.Errorf("loading eBPF objects: %w", err)
-	}
 	m := &Manager{
-		objs: &objs,
+		objs: objs,
 		log:  slog.Default().WithGroup("bpf"),
 	}
 
@@ -55,7 +44,7 @@ func New(conf *config.Config, addr netip.Addr) (*Manager, error) {
 
 	for _, l := range conf.Listeners {
 		if err := m.populateListenerMap(l, addr, func() (*ebpf.Map, error) {
-			return newBackendMap(spec.Maps["listener_map"])
+			return newBackendMap(spec.Maps[lbMapListenerMap])
 		}); err != nil {
 			m.Close()
 			return nil, err
@@ -148,4 +137,34 @@ func newBackendMap(outer *ebpf.MapSpec) (*ebpf.Map, error) {
 		return nil, errors.New("outer map spec does not contain innermap")
 	}
 	return ebpf.NewMap(outer.InnerMap)
+}
+
+func LoadObjects() (*lbObjects, *ebpf.CollectionSpec, error) {
+	spec, err := loadLb()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if err := os.MkdirAll(pinPath, 0o755); err != nil {
+		return nil, nil, err
+	}
+
+	// Load the compiled eBPF ELF and load it into the kernel.
+	var objs lbObjects
+	if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{
+		Maps: ebpf.MapOptions{
+			PinPath: pinPath,
+		},
+	}); err != nil {
+		var verifierErr *ebpf.VerifierError
+		if errors.As(err, &verifierErr) {
+			if err := writeVerifierLog(verifierErr); err != nil {
+				slog.Default().Error("writing verifier error", "error", err)
+			}
+			// print as %+v to get the full error log
+			return nil, nil, fmt.Errorf("verifier error from kernel: %+v", verifierErr)
+		}
+		return nil, nil, fmt.Errorf("loading eBPF objects: %w", err)
+	}
+	return &objs, spec, nil
 }

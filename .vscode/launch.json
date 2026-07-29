@@ -12,6 +12,15 @@
                 "-interface", "dummy0",
             ],
             "asRoot": true
+        },
+        {
+            "name": "Debug CLI",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/yaxelb-dbg",
+            "args": ["maps"],
+            "asRoot": true
         }
     ]
 }

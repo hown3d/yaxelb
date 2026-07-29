@@ -11,6 +11,40 @@ import (
 	"yaxelb/pkg/byteorder"
 )
 
+type LBFiveTuple struct {
+	SrcIP    netip.Addr
+	DstIP    netip.Addr
+	SrcPort  uint16
+	DstPort  uint16
+	Protocol config.Protocol
+}
+
+func lbFiveTupleFromBpf(l lbFiveTupleT) LBFiveTuple {
+	return LBFiveTuple{
+		SrcIP:    l.SrcIp.toNetipAddr(),
+		DstIP:    l.DstIp.toNetipAddr(),
+		SrcPort:  l.SrcPort,
+		DstPort:  l.DstPort,
+		Protocol: (new(config.Protocol)).FromUnix(l.Protocol),
+	}
+}
+
+type LBConntrackEntry struct {
+	SrcIP   netip.Addr
+	DstIP   netip.Addr
+	SrcPort uint16
+	DstPort uint16
+}
+
+func lbConntrackEntryFromBpf(l lbConntrackEntry) LBConntrackEntry {
+	return LBConntrackEntry{
+		SrcIP:   l.SrcIp.toNetipAddr(),
+		DstIP:   l.DstIp.toNetipAddr(),
+		SrcPort: l.SrcPort,
+		DstPort: l.DstPort,
+	}
+}
+
 var (
 	_ encoding.BinaryUnmarshaler = (*lbInAddr)(nil)
 	_ encoding.BinaryMarshaler   = lbInAddr{}
@@ -32,6 +66,12 @@ func (l lbInAddr) MarshalBinary() (data []byte, err error) {
 	// s_addr is already in network order
 	b := *(*[4]byte)(unsafe.Pointer(&l.S_addr))
 	return b[:], nil
+}
+
+func (l lbInAddr) toNetipAddr() netip.Addr {
+	// s_addr is already in network order
+	buf := *(*[4]byte)(unsafe.Pointer(&l.S_addr))
+	return netip.AddrFrom4(buf)
 }
 
 func (l lbInAddr) String() string {
@@ -104,6 +144,18 @@ func (l lbConntrackEntry) MarshalBinary() (data []byte, err error) {
 	return data, nil
 }
 
+func (l *lbConntrackEntry) UnmarshalBinary(data []byte) (err error) {
+	if err := l.SrcIp.UnmarshalBinary(data[0:4]); err != nil {
+		return err
+	}
+	if err := l.DstIp.UnmarshalBinary(data[4:8]); err != nil {
+		return err
+	}
+	l.SrcPort = NetworkOrder.Uint16(data[8:10])
+	l.DstPort = NetworkOrder.Uint16(data[10:12])
+	return nil
+}
+
 func (l lbFiveTupleT) MarshalBinary() (data []byte, err error) {
 	data = make([]byte, 16)
 	srcIPRaw, err := l.SrcIp.MarshalBinary()
@@ -127,6 +179,19 @@ func (l lbFiveTupleT) MarshalBinary() (data []byte, err error) {
 	NetworkOrder.PutUint16(data[10:12], l.DstPort)
 	data[12] = l.Protocol
 	return data, nil
+}
+
+func (l *lbFiveTupleT) UnmarshalBinary(data []byte) (err error) {
+	if err := l.SrcIp.UnmarshalBinary(data[0:4]); err != nil {
+		return err
+	}
+	if err := l.DstIp.UnmarshalBinary(data[4:8]); err != nil {
+		return err
+	}
+	l.SrcPort = NetworkOrder.Uint16(data[8:10])
+	l.DstPort = NetworkOrder.Uint16(data[10:12])
+	l.Protocol = data[12]
+	return nil
 }
 
 // MarshalBinary implements encoding.BinaryMarshaler.

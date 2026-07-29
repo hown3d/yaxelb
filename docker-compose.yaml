@@ -79,6 +79,7 @@ services:
     volumes:
       - ./examples/config.yaml:/loadbalancer/config.yaml
       - /tmp:/tmp/yaxelb
+      - /sys/fs/bpf:/sys/fs/bpf
     command:
       - -log-level=debug
       - -enable-healthcheck=false
