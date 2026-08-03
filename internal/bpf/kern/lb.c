@@ -228,6 +228,11 @@ int load_balance(struct xdp_md *ctx) {
              bpf_ntohs(in.dst_port), in.protocol);
 
   struct conntrack_entry *conn = bpf_map_lookup_elem(&conntrack, &in);
+  __be32 old_saddr = iph->saddr;
+  __be32 old_daddr = iph->daddr;
+  __be32 old_sport = *src_port;
+  __be32 old_dport = *dst_port;
+
   if (conn) {
 #if DEBUG >= DEBUG_LOW
     bpf_printk("conntrack entry for entry found: %pI4:%d -> %pI4:%d",
@@ -235,25 +240,12 @@ int load_balance(struct xdp_md *ctx) {
                bpf_ntohs(conn->dst_port));
 #endif
 
-    __be32 old_saddr = iph->saddr;
-    __be32 old_daddr = iph->daddr;
-    __be32 old_sport = *src_port;
-    __be32 old_dport = *dst_port;
-
     iph->saddr = conn->dst_ip.s_addr; // original dst ip (load balancer)
     iph->daddr = conn->src_ip.s_addr; // original source ip (client)
-    // recalc checksum
-    iph->check = iph_csum(iph);
 
     *src_port =
         conn->dst_port; // original dst port (load balancer listener port)
     *dst_port = conn->src_port; // original src port (client src port)
-
-    // calculate tcp checksum
-    *check = l4_csum(*check, iph, old_saddr, old_daddr, old_sport, old_dport,
-                     *src_port, *dst_port);
-
-    bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(*check));
   } else {
     int ret = select_backend(&in, &backend);
     if (ret < 0) {
@@ -328,23 +320,17 @@ int load_balance(struct xdp_md *ctx) {
       goto out;
     }
 
-    __be32 old_saddr = iph->saddr;
-    __be32 old_daddr = iph->daddr;
-    __be32 old_sport = *src_port;
-    __be32 old_dport = *dst_port;
-
     iph->saddr = iph->daddr;
     iph->daddr = backend->ip.s_addr;
-    // recalc checksum
-    iph->check = iph_csum(iph);
-
     *dst_port = backend->port;
-
-    // calculate tcp checksum
-    *check = l4_csum(*check, iph, old_saddr, old_daddr, old_sport, old_dport,
-                     *src_port, *dst_port);
-    bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(*check));
   }
+  // recalc checksum
+  iph->check = iph_csum(iph);
+  // calculate tcp checksum
+  *check = l4_csum(*check, iph, old_saddr, old_daddr, old_sport, old_dport,
+                   *src_port, *dst_port);
+
+  bpf_printk("new l4 csum: 0x%04X", bpf_ntohs(*check));
 
 #if DEBUG >= DEBUG_MEDIUM
   bpf_printk("fib lookup");
