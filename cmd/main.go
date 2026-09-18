@@ -80,9 +80,9 @@ func run() error {
 		return fmt.Errorf("attaching program to interface %s: %s", ifname, err)
 	}
 
+	slog.Info("successfully attached program, waiting for signals...", "ifname", ifname, "address", addr)
 	bpfManager.Run(ctx)
 
-	slog.Info("successfully attached program, waiting for signals...", "ifname", ifname, "address", addr)
 	<-ctx.Done()
 	return nil
 }
