@@ -20,7 +20,7 @@ generate-ebpf:
 	go generate ./...
 
 ifeq ($(KERNEL), Linux)
-test-integration: 
+test-integration: test-ebpf
 else
 test-integration: test-epbf-in-docker
 endif

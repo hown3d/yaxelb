@@ -75,6 +75,6 @@ networks:
       com.docker.network.bridge.gateway_mode_ipv6: routed
     ipam:
      config:
-      - subnet: fd00:db81:1::/96
+      - subnet: fd00:db81:1::/64
 
 
