@@ -51,7 +51,7 @@ services:
       - /sys/fs/bpf:/sys/fs/bpf
     command:
       - -log-level=debug
-      - -enable-healthcheck=true
+      - -enable-healthcheck=false
       # use generic xdp mode, because veth pairs do not natively support XDP_REDIRECT
       # To do so, one must enable gro and disable tx-checksumming via ethtool
       # - -xdp-mode=generic
