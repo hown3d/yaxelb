@@ -11,9 +11,9 @@ import (
 	"yaxelb/internal/bpf"
 	"yaxelb/internal/config"
 	"yaxelb/pkg/net"
+	"yaxelb/pkg/sysctl"
 
 	"github.com/cilium/ebpf/rlimit"
-	"github.com/lorenzosaino/go-sysctl"
 	"github.com/vishvananda/netlink"
 )
 
@@ -65,7 +65,7 @@ func run() error {
 		return fmt.Errorf("getting address of interface %s: %w", ifname, err)
 	}
 	if addr.Is6() {
-		if err := enableIPV6Forwarding(); err != nil {
+		if err := sysctl.EnableForwarding(iface, true); err != nil {
 			return fmt.Errorf("enabling ipv6 forwarding: %w", err)
 		}
 	}
@@ -85,8 +85,4 @@ func run() error {
 
 	<-ctx.Done()
 	return nil
-}
-
-func enableIPV6Forwarding() error {
-	return sysctl.Set("net.ipv6.conf.all.forwarding", "1")
 }
