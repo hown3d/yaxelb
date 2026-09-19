@@ -20,71 +20,20 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/compose"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
-func TestYaxeLB(t *testing.T) {
-	stack := composeUp(t)
-	registerTracePrint(t)
-	lbContainer, err := stack.ServiceContainer(t.Context(), "lb")
-	if err != nil {
-		t.Fatal("getting lb container", err)
-	}
-	if err := setupLBInterfaceForNativeXDP(t.Context(), lbContainer); err != nil {
-		t.Fatal("setup lb interface for native xdp", err)
-	}
+type IPFamily int
 
-	testcases := []struct {
-		name    string
-		cmd     []string
-		wantErr bool
-	}{
-		{
-			name: "http",
-			cmd:  []string{"curl", "--connect-timeout", "3s", "-v", "http://10.0.0.2"},
-		},
-		{
-			name: "netcat udp",
-			cmd:  []string{"nc", "-vzu", "-w", "1", "10.0.0.2", "8080"},
-		},
-		{
-			name: "netcat on port not bound by listener",
-			cmd:  []string{"nc", "-vzu", "-w", "1", "10.0.0.2", "4200"},
-		},
-		{
-			name:    "netcat with wrong protocol",
-			cmd:     []string{"nc", "-vz", "-w", "1", "10.0.0.2", "4200"},
-			wantErr: true,
-		},
-	}
+const IPv4 IPFamily = unix.AF_INET
+const IPv6 IPFamily = unix.AF_INET6
 
-	for _, tt := range testcases {
-		t.Run(tt.name, func(t *testing.T) {
-			clientContainer, err := stack.ServiceContainer(t.Context(), "client")
-			if err != nil {
-				t.Errorf("getting client container: %v", err)
-				return
-			}
-			code, r, err := clientContainer.Exec(t.Context(), tt.cmd, tcexec.Multiplexed())
-			if err != nil {
-				t.Errorf("executing curl in client: %v", err)
-				return
-			}
-			if code != 0 && !tt.wantErr {
-				log, _ := io.ReadAll(r)
-				t.Errorf("command return error code != 0, got %d", code)
-				t.Logf("output:\n%s", log)
-				return
-			}
-		})
-	}
-}
-
-func composeUp(t *testing.T) *compose.DockerCompose {
+func composeUp(t *testing.T, family IPFamily) *compose.DockerCompose {
 	stack, err := compose.NewDockerComposeWith(
 		compose.WithLogger(log.New(t.Output(), t.Name()+": ", 0)),
 
 		compose.StackIdentifier(strings.ToLower(t.Name())),
-		compose.WithStackFiles(composeFilePath()),
+		compose.WithStackFiles(composeFilePath(family)),
 	)
 	if err != nil {
 		t.Fatalf("creating docker compose stack: %s", err)
@@ -117,12 +66,19 @@ func composeUp(t *testing.T) *compose.DockerCompose {
 	return stack
 }
 
-func composeFilePath() string {
+func composeFilePath(ipFamily IPFamily) string {
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		panic("can't get filename")
 	}
-	return filepath.Join(filepath.Dir(filename), "..", "..", "docker-compose.yaml")
+	var composeFile string
+	switch ipFamily {
+	case IPv4:
+		composeFile = "docker-compose.yaml"
+	case IPv6:
+		composeFile = "docker-compose-v6.yaml"
+	}
+	return filepath.Join(filepath.Dir(filename), "..", "..", composeFile)
 }
 
 // registerTracePrint will print all kernel traces after the test has been run.

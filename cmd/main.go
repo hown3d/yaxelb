@@ -11,6 +11,7 @@ import (
 	"yaxelb/internal/bpf"
 	"yaxelb/internal/config"
 	"yaxelb/pkg/net"
+	"yaxelb/pkg/sysctl"
 
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/vishvananda/netlink"
@@ -61,7 +62,12 @@ func run() error {
 
 	addr, err := net.AddressOfInterface(iface)
 	if err != nil {
-		return fmt.Errorf("getting address of interface %s: %w", iface, err)
+		return fmt.Errorf("getting address of interface %s: %w", ifname, err)
+	}
+	if addr.Is6() {
+		if err := sysctl.EnableForwarding(iface, true); err != nil {
+			return fmt.Errorf("enabling ipv6 forwarding: %w", err)
+		}
 	}
 
 	bpfManager, err := bpf.New(c, addr)
@@ -74,9 +80,9 @@ func run() error {
 		return fmt.Errorf("attaching program to interface %s: %s", ifname, err)
 	}
 
+	slog.Info("successfully attached program, waiting for signals...", "ifname", ifname, "address", addr)
 	bpfManager.Run(ctx)
 
-	slog.Info("successfully attached program, waiting for signals...", "ifname", ifname, "address", addr)
 	<-ctx.Done()
 	return nil
 }

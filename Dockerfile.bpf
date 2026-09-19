@@ -3,14 +3,7 @@ FROM debian:sid AS compile
 ARG TARGETARCH
 
 RUN apt-get update
-RUN apt-get install -y wget lsb-release gpg
-RUN wget https://apt.llvm.org/llvm.sh && \
-  chmod +x llvm.sh && \
-  ./llvm.sh 22 all
-
-
-RUN apt-get install --no-install-recommends -y libbpf-dev linux-headers-generic \
-  ca-certificates golang 
+RUN apt-get install --no-install-recommends -y libbpf-dev linux-headers-generic golang ca-certificates llvm-22 clang-22
 
 RUN update-alternatives --install /usr/bin/clang clang $(which clang-22) 1
 RUN update-alternatives --install /usr/bin/llvm-strip llvm-strip $(which llvm-strip-22) 1
