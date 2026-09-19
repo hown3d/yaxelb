@@ -10,6 +10,7 @@ import (
 	"testing"
 	"yaxelb/internal/bpf/testutil"
 	"yaxelb/internal/config"
+	"yaxelb/pkg/sysctl"
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
@@ -63,6 +64,9 @@ func (s *ipv6Suite) SetupSuite() {
 		t.Fatalf("setup test link: %v", err)
 		return
 	}
+
+	assert.NoError(t, sysctl.EnableForwarding(s.lbLink, true))
+
 	t.Cleanup(func() {
 		netlink.LinkDel(s.lbLink)
 	})
