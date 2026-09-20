@@ -60,10 +60,6 @@ services:
     privileged: true
     networks:
       lb6:
-        driver_opts:
-          # must use IFNAME 
-          # forwarding 
-          com.docker.network.endpoint.sysctls: net.ipv6.conf.IFNAME.forwarding=1
         ipv6_address: fd00:db81:1::2
 
     

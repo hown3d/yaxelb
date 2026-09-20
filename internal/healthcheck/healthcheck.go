@@ -53,6 +53,8 @@ func (m *Manager) ResultChan() <-chan *Result {
 }
 
 func (m *Manager) performChecks(ctx context.Context) {
+	// don't wait for first ticker
+	m.runChecks(ctx)
 	for {
 		select {
 		case <-ctx.Done():
