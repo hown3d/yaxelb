@@ -18,3 +18,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+func init() {
+	rootCmd.PersistentFlags().Bool("ipv6", false, "IPv6")
+}

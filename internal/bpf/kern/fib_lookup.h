@@ -1,25 +1,15 @@
+#pragma once
+
 #include "consts.h"
 #include "helpers/ip.h"
+#include "helpers/ip6.h"
 #include "vmlinux.h"
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 
-static int __always_inline fib_lookup_v4(struct xdp_md *ctx, struct ethhdr *eth,
-                                         struct iphdr *ip4) {
-
-  if (eth->h_proto != bpf_htons(ETH_P_IP)) {
-    return -EINVAL;
-  }
-
-  struct bpf_fib_lookup fib_params = {};
-  fib_params.ifindex = ctx->ingress_ifindex;
-  fib_params.family = AF_INET;
-  fib_params.tos = ip4->tos;
-  fib_params.l4_protocol = ip4->protocol;
-  fib_params.tot_len = bpf_ntohs(ip4->tot_len);
-  fib_params.ipv4_src = ip4->saddr;
-  fib_params.ipv4_dst = ip4->daddr;
-
+static int __always_inline fib_lookup(struct xdp_md *ctx,
+                                      struct bpf_fib_lookup fib_params,
+                                      struct ethhdr *eth) {
   int ret = bpf_fib_lookup(ctx, &fib_params, sizeof(fib_params), 0);
   bpf_printk("fib lookup code: %d", ret);
   switch (ret) {
@@ -51,4 +41,42 @@ static int __always_inline fib_lookup_v4(struct xdp_md *ctx, struct ethhdr *eth,
   }
   bpf_printk("unknown fib lookup code: %d", ret);
   return XDP_ABORTED;
+}
+
+static int __always_inline fib_lookup_v4(struct xdp_md *ctx, struct ethhdr *eth,
+                                         struct iphdr *ip4) {
+
+  if (eth->h_proto != bpf_htons(ETH_P_IP)) {
+    return -EINVAL;
+  }
+
+  struct bpf_fib_lookup fib_params = {};
+  fib_params.ifindex = ctx->ingress_ifindex;
+  fib_params.family = AF_INET;
+  fib_params.tos = ip4->tos;
+  fib_params.l4_protocol = ip4->protocol;
+  fib_params.tot_len = bpf_ntohs(ip4->tot_len);
+  fib_params.ipv4_src = ip4->saddr;
+  fib_params.ipv4_dst = ip4->daddr;
+
+  return fib_lookup(ctx, fib_params, eth);
+}
+
+static int __always_inline fib_lookup_v6(struct xdp_md *ctx, struct ethhdr *eth,
+                                         struct ipv6hdr *ip6) {
+
+  if (eth->h_proto != bpf_htons(ETH_P_IP6)) {
+    return -EINVAL;
+  }
+
+  struct bpf_fib_lookup fib_params = {};
+  fib_params.ifindex = ctx->ingress_ifindex;
+  fib_params.family = AF_INET6;
+  fib_params.l4_protocol = ip6->nexthdr;
+  ipv6_addr_copy((union v6addr *)(&fib_params.ipv6_src),
+                 (union v6addr *)ip6->saddr.in6_u.u6_addr32);
+  ipv6_addr_copy((union v6addr *)(&fib_params.ipv6_dst),
+                 (union v6addr *)ip6->daddr.in6_u.u6_addr32);
+
+  return fib_lookup(ctx, fib_params, eth);
 }

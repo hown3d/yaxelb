@@ -58,15 +58,69 @@ type lbListenerEntry struct {
 	Pad      [1]uint8
 }
 
+type lbV6Backend struct {
+	_  structs.HostLayout
+	Ip struct {
+		_    structs.HostLayout
+		Addr [16]uint8
+	}
+	Port uint16
+	Pad  [2]uint8
+}
+
+type lbV6ConntrackEntry struct {
+	_     structs.HostLayout
+	SrcIp struct {
+		_    structs.HostLayout
+		Addr [16]uint8
+	}
+	DstIp struct {
+		_    structs.HostLayout
+		Addr [16]uint8
+	}
+	SrcPort uint16
+	DstPort uint16
+}
+
+type lbV6FiveTupleT struct {
+	_     structs.HostLayout
+	SrcIp struct {
+		_    structs.HostLayout
+		Addr [16]uint8
+	}
+	DstIp struct {
+		_    structs.HostLayout
+		Addr [16]uint8
+	}
+	SrcPort  uint16
+	DstPort  uint16
+	Protocol uint8
+	Pad      [3]uint8
+}
+
+type lbV6ListenerEntry struct {
+	_  structs.HostLayout
+	Ip struct {
+		_    structs.HostLayout
+		Addr [16]uint8
+	}
+	Port     uint16
+	Protocol uint8
+	Pad      [1]uint8
+}
+
 // Names of all BPF objects in the ELF.
 //
 // Used for safe lookups in a Collection or CollectionSpec.
 const (
-	lbMapConntrack    = "conntrack"
-	lbMapListenerMap  = "listener_map"
-	lbMapNumBackends  = "num_backends"
-	lbProgLoadBalance = "load_balance"
-	lbVarLbAlgo       = "lb_algo"
+	lbMapConntrack     = "conntrack"
+	lbMapListenerMap   = "listener_map"
+	lbMapNumBackends   = "num_backends"
+	lbMapV6Conntrack   = "v6_conntrack"
+	lbMapV6ListenerMap = "v6_listener_map"
+	lbMapV6NumBackends = "v6_num_backends"
+	lbProgLoadBalance  = "load_balance"
+	lbVarLbAlgo        = "lb_algo"
 )
 
 // loadLb returns the embedded CollectionSpec for lb.
@@ -118,9 +172,12 @@ type lbProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type lbMapSpecs struct {
-	Conntrack   *ebpf.MapSpec `ebpf:"conntrack"`
-	ListenerMap *ebpf.MapSpec `ebpf:"listener_map"`
-	NumBackends *ebpf.MapSpec `ebpf:"num_backends"`
+	Conntrack     *ebpf.MapSpec `ebpf:"conntrack"`
+	ListenerMap   *ebpf.MapSpec `ebpf:"listener_map"`
+	NumBackends   *ebpf.MapSpec `ebpf:"num_backends"`
+	V6Conntrack   *ebpf.MapSpec `ebpf:"v6_conntrack"`
+	V6ListenerMap *ebpf.MapSpec `ebpf:"v6_listener_map"`
+	V6NumBackends *ebpf.MapSpec `ebpf:"v6_num_backends"`
 }
 
 // lbVariableSpecs contains global variables before they are loaded into the kernel.
@@ -150,9 +207,12 @@ func (o *lbObjects) Close() error {
 //
 // It can be passed to loadLbObjects or ebpf.CollectionSpec.LoadAndAssign.
 type lbMaps struct {
-	Conntrack   *ebpf.Map `ebpf:"conntrack"`
-	ListenerMap *ebpf.Map `ebpf:"listener_map"`
-	NumBackends *ebpf.Map `ebpf:"num_backends"`
+	Conntrack     *ebpf.Map `ebpf:"conntrack"`
+	ListenerMap   *ebpf.Map `ebpf:"listener_map"`
+	NumBackends   *ebpf.Map `ebpf:"num_backends"`
+	V6Conntrack   *ebpf.Map `ebpf:"v6_conntrack"`
+	V6ListenerMap *ebpf.Map `ebpf:"v6_listener_map"`
+	V6NumBackends *ebpf.Map `ebpf:"v6_num_backends"`
 }
 
 func (m *lbMaps) Close() error {
@@ -160,6 +220,9 @@ func (m *lbMaps) Close() error {
 		m.Conntrack,
 		m.ListenerMap,
 		m.NumBackends,
+		m.V6Conntrack,
+		m.V6ListenerMap,
+		m.V6NumBackends,
 	)
 }
 

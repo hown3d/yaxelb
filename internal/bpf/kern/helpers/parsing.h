@@ -1,4 +1,5 @@
-#include "../consts.h"
+#pragma once
+
 #include "vmlinux.h"
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
@@ -52,6 +53,24 @@ static __always_inline int parse_iphdr(struct hdr_cursor *cursor,
   cursor->pos += hdrsize;
   *iphdr = iph;
   return iph->protocol;
+}
+
+static __always_inline int parse_ip6hdr(struct hdr_cursor *cursor,
+                                        void *data_end,
+                                        struct ipv6hdr **ipv6hdr) {
+
+  struct ipv6hdr *iph = cursor->pos;
+  int hdrsize = sizeof(*iph);
+
+  if (iph + 1 > data_end)
+    return -1;
+
+  if (cursor->pos + hdrsize > data_end)
+    return -1;
+
+  cursor->pos += hdrsize;
+  *ipv6hdr = iph;
+  return iph->nexthdr;
 }
 
 #define TCP_MAXLEN 60
